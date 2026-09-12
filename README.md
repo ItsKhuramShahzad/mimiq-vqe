@@ -3,7 +3,7 @@
 Molecular ground-state energies with the Variational Quantum Eigensolver (VQE),
 running on [QPerfect MIMIQ](https://qperfect.io).
 
-This project ports a molecular VQE benchmark originally written for NVIDIA CUDA-Q
+This project maps a molecular VQE benchmark originally written for NVIDIA CUDA-Q
 onto MIMIQ, so that the same set of molecules, the same active spaces and the same
 optimisation settings can be run on both platforms and compared directly.
 
