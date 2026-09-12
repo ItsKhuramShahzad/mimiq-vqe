@@ -1,0 +1,11 @@
+config/credentials/
+*.json.token
+*.pkl
+*.pb
+logs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+figures/
+tex_out/
+*.bak-*
