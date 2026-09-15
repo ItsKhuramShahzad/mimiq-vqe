@@ -43,29 +43,34 @@ where the full problem is small enough to diagonalise.
 Twelve closed-shell, even-electron molecules. Each has several active spaces, from
 6 up to 14 qubits.
 
-| Molecule | Formula | Electrons | Spatial orbitals |
-|---|---|---|---|
-| Ethylene | C2H4 | 16 | 26 |
-| Methanamide | CHONH2 | 24 | 33 |
-| NH2- | NH2- | 10 | 13 |
-| Benzene | C6H6 | 42 | 66 |
-| Naphthalene | C10H8 | 68 | 106 |
-| Benzaanthracene | C18H12 | 120 | 186 |
-| Pentacene | C22H14 | 146 | 226 |
-| Adenine | C5H5N5 | 70 | 100 |
-| Guanine | C5H5N5O | 78 | 109 |
-| Cytosine | C4H5N3O | 58 | 82 |
-| Thymine | C5H6N2O2 | 66 | 93 |
-| Uracil | C4H4N2O2 | 58 | 80 |
+| Molecule | Formula | Electrons | Spatial orbitals (cc-pVDZ) | Geometry source |
+|---|---|---|---|---|
+| Ethylene | C2H4 | 16 | 48 | NIST CCCBDB |
+| Methanamide | CHONH2 | 24 | 57 | — |
+| NH2- | NH2- | 10 | 24 | NIST CCCBDB |
+| Benzene | C6H6 | 42 | 114 | NIST CCCBDB |
+| Naphthalene | C10H8 | 68 | 180 | NIST CCCBDB |
+| Benzaanthracene | C18H12 | 120 | 312 | NIST CCCBDB |
+| Pentacene | C22H14 | 146 | 378 | PubChem |
+| Adenine | C5H5N5 | 70 | 165 | PubChem |
+| Guanine | C5H5N5O | 78 | 179 | PubChem |
+| Cytosine | C4H5N3O | 58 | 137 | PubChem |
+| Thymine | C5H6N2O2 | 66 | 156 | PubChem |
+| Uracil | C4H4N2O2 | 58 | 132 | PubChem |
 
 The set spans small molecules where FCI is available, aromatic systems, and the
-four DNA and RNA nucleobases. The larger members are included because their
+five DNA and RNA nucleobases. The larger members are included because their
 mean-field step is expensive even though their active spaces are small, which is
 itself part of what the benchmark measures.
 
 Two open-shell species in `config/molecules_data.py`, NH3+ and methylene, are
 excluded from the current scope. They need an unrestricted reference and a
 different ansatz.
+
+Geometries come from the NIST Computational Chemistry Comparison and Benchmark
+Database (CCCBDB) or from PubChem 3D conformers. The source, identifiers (InChI,
+SMILES, PubChem CID) and geometry method are recorded per molecule in
+`config/molecules_data.py`.
 
 ## Status
 
