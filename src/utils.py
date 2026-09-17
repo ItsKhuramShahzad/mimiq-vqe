@@ -1,6 +1,6 @@
 """ Shared helper, copied verbation from reference/2026_JUNE_Optimized_VQE.py
 These must stay byte-identical to the CUDA-Q reference. snitize_name feed the pkl filename
-convention the analysis chain parses, and _stable_hash seeds the jitter RNG , if the two beackends dra different jitter, the benchmakr measures luck rether than backend (docs/12 12.2)
+convention the analysis chain parses, and _stable_hash seeds the jitter RNG , if the two beackends dra different jitter, the benchmakr measures luck rether than backend
 """
 
 import re

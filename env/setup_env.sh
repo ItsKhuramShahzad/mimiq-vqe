@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the combined MIMIQ + chemistry environment.
 # Neither the existing `mimiq` nor `qchem` env is sufficient on its own
-# (see plan §PHASE 0). Shortest path is extending `mimiq`.
+# Shortest path is extending `mimiq`.
 set -euo pipefail
 
 ENV_NAME="${1:-mimiq}"
