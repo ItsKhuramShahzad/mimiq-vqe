@@ -35,7 +35,8 @@ Tested with:
 exaqt and mimiq-openfermion are QPerfect packages and are not on PyPI.
 
 cudaq is optional. If it is installed it is only used to count the CUDA-Q
-UCCSD parameters (see Notes). Without it a closed form count is used.
+UCCSD parameters, so the optimizer settings match the CUDA-Q runs. Without it
+a closed form count is used.
 
 ## Installation
 
@@ -111,32 +112,42 @@ The optimizer settings are the same as in the CUDA-Q script: COBYLA, tol 1e-10,
 rhobeg 0.2, 3 restarts, cycles of 600 iterations, stop after 3 cycles that
 improve by less than 1e-6 Ha.
 
-## Notes
+## Molecules
 
-**decompose() before running.** Exaqt cannot run the composite gates made by
-`push_suzukitrotter` yet, so the circuit is decomposed before every run.
+12 closed shell molecules, cc-pVDZ basis. Geometries are from NIST CCCBDB or
+PubChem, as recorded in `config/molecules_data.py`.
 
-**Ansatz builder.** `build_uccsd_singlet_ansatz` in mimiq-openfermion fails
-with "Number of qubits does not match Hamiltonian" when the non zero amplitudes
-do not reach the highest qubit. This happens for sparse parameter vectors, for
-example on the first COBYLA steps. `src/mimiq_ansatz.py` builds the same
-circuit but uses the generator's own qubit count for the Trotter step. The
-energies are the same as with the library builder wherever that one works.
+| Molecule | Formula | Electrons | Orbitals (cc-pVDZ) | Geometry |
+|---|---|---:|---:|---|
+| NH2- | NH2- | 10 | 24 | NIST CCCBDB |
+| Ethylene | C2H4 | 16 | 48 | NIST CCCBDB |
+| Methanamide | CHONH2 | 24 | 57 | |
+| Benzene | C6H6 | 42 | 114 | NIST CCCBDB |
+| Naphthalene | C10H8 | 68 | 180 | NIST CCCBDB |
+| Benzaanthracene | C18H12 | 120 | 312 | NIST CCCBDB |
+| Pentacene | C22H14 | 146 | 378 | PubChem |
+| Uracil | C4H4N2O2 | 58 | 132 | PubChem |
+| Cytosine | C4H5N3O | 58 | 137 | PubChem |
+| Thymine | C5H6N2O2 | 66 | 156 | PubChem |
+| Adenine | C5H5N5 | 70 | 165 | PubChem |
+| Guanine | C5H5N5O | 78 | 179 | PubChem |
 
-**Starting point.** The CCSD amplitudes already give most of the correlation
-energy before any optimisation: about 94% for Ethylene, 85-92% for Benzene,
-73-82% for Cytosine. The factor of 2 on the doubles used in the CUDA-Q version
-is not needed here. It comes from how the CUDA-Q UCCSD kernel applies the
-rotations.
+Each molecule has 9 active spaces, from 6 to 14 qubits, written as
+(active electrons, active orbitals):
 
-**Parameter count.** The singlet UCCSD in OpenFermion has fewer parameters
-than the CUDA-Q UCCSD (14 qubits, 8 electrons: 90 vs 204). The CUDA-Q script
-uses no restarts and a smaller step when there are more than 150 parameters.
-To keep the settings the same on both, this code decides that from the CUDA-Q
-count, not from its own.
+    6 qubits    (2,3) (4,3)
+    8 qubits    (2,4) (4,4) (6,4)
+    10 qubits   (4,5) (6,5)
+    12 qubits   (6,6)
+    14 qubits   (6,7)
 
-**Speed.** The circuit is rebuilt at every energy evaluation. At 14 qubits this
-takes more than half of the time per evaluation.
+Ethylene also has (8,5) and Pentacene also has (4,6), so they have 10.
+
+The core orbitals below the active space are frozen. The number of core
+orbitals for each space is `ncore` in `config/molecules_data.py`.
+
+The data file also has NH3+ and Methylene. They are open shell and are not
+run by this code.
 
 ## Tests
 
