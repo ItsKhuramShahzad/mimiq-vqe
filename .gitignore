@@ -9,5 +9,4 @@ __pycache__/
 figures/
 tex_out/
 *.bak-*
-integrals/
 integrals_test/
