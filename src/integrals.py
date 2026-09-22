@@ -7,14 +7,16 @@ norb_cas^4 instead of the two full nmo^4 copies that
 openfermionpyscf.compute_integrals() makes. Same Hamiltonian, checked to 1e-13.
 
 Each file stores the integrals plus e_hf and e_casci, so a file can be checked
-against the molecule it claims to be.
+against the molecule it claims to be. Optionally it also stores the CCSD
+amplitudes cut to the active space (t1_active, t2_active), which are the VQE
+starting point, so a VQE run needs nothing but the file.
 """
 
 import numpy as np
 import pyscf
 from openfermion import InteractionOperator, get_fermion_operator, jordan_wigner
 from openfermion.chem.molecular_data import spinorb_from_spatial
-from pyscf import ao2mo, fci, gto, mcscf, scf
+from pyscf import ao2mo, cc, fci, gto, mcscf, scf
 
 REQUIRED_KEYS = {"ncore", "nele_cas", "norb_cas", "n_electrons",
                  "e_core", "h1", "eri", "e_hf", "e_casci"}
@@ -30,8 +32,35 @@ def run_scf(entry, basis, max_memory=16000):
     return mf
 
 
-def compute_active_space(mf, ncore, nele_cas, norb_cas):
-    """Active-space integrals and CASCI energy for one active space."""
+def run_ccsd(mf, max_memory=16000):
+    """CCSD on the whole molecule, all orbitals correlated (as in the CUDA-Q script).
+    Returns (E_ccsd_total, t1, t2) with PySCF's t1[i,a], t2[i,j,a,b]."""
+    mycc = cc.CCSD(mf)
+    mycc.max_memory = max_memory
+    mycc.verbose = 0
+    e_corr, t1, t2 = mycc.kernel()
+    if not mycc.converged:
+        raise RuntimeError("CCSD did not converge")
+    return float(mf.e_tot + e_corr), t1, t2
+
+
+def slice_ccsd_to_active(t1, t2, nocc, active_orbitals):
+    """Keep only the amplitudes inside the active space.
+    Occupied indices count from 0, virtual indices count from 0 after nocc."""
+    occ = [p for p in active_orbitals if p < nocc]
+    vir = [p - nocc for p in active_orbitals if p >= nocc]
+    if not occ or not vir:
+        return (np.zeros((len(occ), len(vir))),
+                np.zeros((len(occ),) * 2 + (len(vir),) * 2))
+    return (np.asarray(t1)[np.ix_(occ, vir)],
+            np.asarray(t2)[np.ix_(occ, occ, vir, vir)])
+
+
+def compute_active_space(mf, ncore, nele_cas, norb_cas, ccsd=None):
+    """Active-space integrals and CASCI energy for one active space.
+
+    ccsd: optional (E_ccsd_total, t1, t2) from run_ccsd(). If given, the
+    amplitudes are cut to this active space and stored with the integrals."""
     nelec = mf.mol.nelectron
     nmo = mf.mo_coeff.shape[1]
     if 2 * ncore + nele_cas != nelec:
@@ -52,9 +81,16 @@ def compute_active_space(mf, ncore, nele_cas, norb_cas):
     if abs(e_check - e_casci) > 1e-8:
         raise RuntimeError(f"integrals give {e_check}, CASCI gave {e_casci}")
 
-    return dict(ncore=ncore, nele_cas=nele_cas, norb_cas=norb_cas,
+    data = dict(ncore=ncore, nele_cas=nele_cas, norb_cas=norb_cas,
                 n_electrons=nelec, nmo=nmo, e_core=float(e_core), h1=h1, eri=eri,
                 e_hf=float(mf.e_tot), e_casci=e_casci, pyscf_version=pyscf.__version__)
+
+    if ccsd is not None:
+        e_ccsd, t1, t2 = ccsd
+        t1a, t2a = slice_ccsd_to_active(t1, t2, nelec // 2,
+                                        list(range(ncore, ncore + norb_cas)))
+        data.update(e_ccsd=float(e_ccsd), t1_active=t1a, t2_active=t2a)
+    return data
 
 
 def save_active_space(path, data, **metadata):
@@ -78,6 +114,13 @@ def load_active_space(path):
     n = data["norb_cas"]
     if data["h1"].shape != (n, n) or data["eri"].shape != (n, n, n, n):
         raise ValueError(f"{path}: integral shapes do not match norb_cas={n}")
+
+    if "t1_active" in data:
+        no = data["nele_cas"] // 2
+        nv = n - no
+        if data["t1_active"].shape != (no, nv) or data["t2_active"].shape != (no, no, nv, nv):
+            raise ValueError(f"{path}: CCSD amplitude shapes do not match the active space")
+        data["e_ccsd"] = float(data["e_ccsd"])
     return data
 
 

@@ -69,3 +69,70 @@ def test_rejects_space_that_does_not_fit():
     mf = run_scf(molecules[NAME], BASIS)
     with pytest.raises(ValueError, match="electrons"):
         compute_active_space(mf, NCORE - 1, NELE, NORB)
+
+
+# ---------------------------------------------------------------------------
+# CCSD amplitudes stored with the integrals (the VQE starting point)
+# ---------------------------------------------------------------------------
+
+from openfermion import uccsd_singlet_paramsize as _paramsize
+from src.integrals import run_ccsd, slice_ccsd_to_active
+from src.run_single import pack_ccsd_singlet
+
+
+@pytest.fixture(scope="module")
+def saved_file_ccsd(tmp_path_factory):
+    mf = run_scf(molecules[NAME], BASIS)
+    ccsd = run_ccsd(mf)
+    data = compute_active_space(mf, NCORE, NELE, NORB, ccsd=ccsd)
+    path = tmp_path_factory.mktemp("integrals_ccsd") / "space.npz"
+    save_active_space(path, data, molecule=NAME, basis=BASIS)
+    return path, mf, ccsd
+
+
+def test_amplitudes_have_active_space_shape(saved_file_ccsd):
+    path, _, _ = saved_file_ccsd
+    data = load_active_space(path)
+    nocc_act, nvir_act = NELE // 2, NORB - NELE // 2
+    assert data["t1_active"].shape == (nocc_act, nvir_act)
+    assert data["t2_active"].shape == (nocc_act, nocc_act, nvir_act, nvir_act)
+    assert data["e_ccsd"] < data["e_hf"]
+
+
+def test_amplitudes_equal_full_ccsd_sliced(saved_file_ccsd):
+    """The stored amplitudes are exactly the full-molecule CCSD cut to the active space."""
+    path, mf, (_, t1, t2) = saved_file_ccsd
+    data = load_active_space(path)
+    nocc = mf.mol.nelectron // 2
+    t1a, t2a = slice_ccsd_to_active(t1, t2, nocc, list(range(NCORE, NCORE + NORB)))
+    assert np.array_equal(data["t1_active"], t1a)
+    assert np.array_equal(data["t2_active"], t2a)
+
+
+def test_seed_from_file_matches_run_single(saved_file_ccsd):
+    """Starting point from the file = starting point run_single.py builds today."""
+    path, mf, (_, t1, t2) = saved_file_ccsd
+    data = load_active_space(path)
+
+    theta_file = pack_ccsd_singlet(data["t1_active"], data["t2_active"])
+    assert len(theta_file) == _paramsize(2 * NORB, NELE)
+
+    from src.run_single import slice_ccsd_to_active as rs_slice
+    nocc = mf.mol.nelectron // 2
+    theta_run_single = pack_ccsd_singlet(*rs_slice(t1, t2, nocc, list(range(NCORE, NCORE + NORB))))
+    assert np.array_equal(theta_file, theta_run_single)
+
+    H, c0, _ = openfermion_to_mimiq_hamiltonian(qubit_hamiltonian(data))
+    energy_fn, _ = make_energy_fn(H, constant=0.0, n_qubits=2 * NORB, n_electrons=NELE)
+    e_seed = c0 + energy_fn(theta_file)
+    assert data["e_casci"] - 1e-10 < e_seed < data["e_hf"]
+
+
+def test_rejects_wrong_amplitude_shape(saved_file_ccsd, tmp_path):
+    path, _, _ = saved_file_ccsd
+    data = dict(np.load(path, allow_pickle=True))
+    data["t1_active"] = data["t1_active"][:, :0]
+    bad = tmp_path / "bad_ccsd.npz"
+    np.savez_compressed(bad, **data)
+    with pytest.raises(ValueError, match="amplitude"):
+        load_active_space(bad)
