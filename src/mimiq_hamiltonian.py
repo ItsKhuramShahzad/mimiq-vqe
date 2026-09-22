@@ -3,7 +3,7 @@
 # import re
 
 
-def openfermion_to_mimiq_hamiltonian(qubit_op, tol=1e-12, imag_tol=1e-9):
+def openfermion_to_mimiq_hamiltonian(qubit_op, tol=1e-12, imag_tol=1e-6):
     """
     Convert an OpenFermion QubitOperator to a MIMIQ Hamiltonian.
 

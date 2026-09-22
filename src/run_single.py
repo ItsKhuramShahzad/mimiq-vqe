@@ -197,7 +197,7 @@ def backend_versions():
 # -----------------------------
 # Run one molecule
 # -----------------------------
-def run_one_molecule(mol_name, spec):
+def run_one_molecule(mol_name, spec, checkpoint_path=None):
     mol_name_clean = sanitize_name(mol_name)
 
     if int(spec["multiplicity"]) != 1 or int(spec["Total Electrons"]) % 2 != 0:
@@ -300,7 +300,7 @@ def run_one_molecule(mol_name, spec):
         H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
 
         # constant=0.0: the driver works with E_nc, c0 is added below.
-        energy_fn, _ = make_energy_fn(
+        energy_fn, execute_times  = make_energy_fn(
             H, constant=0.0, n_qubits=qubit_count, n_electrons=nele_cas)
 
         expected = int(uccsd_singlet_paramsize(qubit_count, nele_cas))
@@ -341,7 +341,7 @@ def run_one_molecule(mol_name, spec):
             seed_out = None
             theta_seed = theta0.copy()
             best_init_index = -1
-
+        n_exec_before_vqe = len(execute_times)
         vqe_out = vqe_until_converged(
             energy_fn, theta_seed, local_rng,
             eps_E=VQE_EPS_E, patience=VQE_PATIENCE, max_cycles=VQE_MAX_CYCLES,
@@ -388,6 +388,10 @@ def run_one_molecule(mol_name, spec):
                 "cycles": int(vqe_out["cycles"]),
                 "runtime": float(vqe_out["runtime_total"]),
                 "simulated_quantum_runtime": float(vqe_out["runtime_quantum_sum"]),
+                "simulated_quantum_runtime": float(vqe_out["runtime_quantum_sum"]),
+                "exaqt_execute_seconds": float(sum(execute_times[n_exec_before_vqe:])),
+                "exaqt_execute_calls": int(len(execute_times) - n_exec_before_vqe),
+
                 "optimizer_runtime": float(vqe_out["runtime_optimizer"]),
                 "quantum_times": list(vqe_out["quantum_times"]),
                 "energy_convergence": list(vqe_out["energy_convergence"]),
@@ -406,6 +410,11 @@ def run_one_molecule(mol_name, spec):
                                           if E_CCSD_FULL is not None else None),
             },
         })
+        
+        if checkpoint_path is not None:
+            save_pkl({mol_name: molecule_results}, checkpoint_path)
+            print(f"[SAVE ] {len(molecule_results['active_space_runs'])} spaces so far "
+                  f"-> {checkpoint_path}", flush=True)
 
     return molecule_results
                     
@@ -444,20 +453,24 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER}", flush=True)
-
-    mol_res = run_one_molecule(args.molecule, spec)
-    payload = {args.molecule: mol_res}
-
-    validate_payload(payload)
-
     tag = time.strftime("%d_%b_%Y").upper()
     file_name = (f"{tag}_{sanitize_name(args.molecule)}_{sanitize_name(BASIS)}_"
                  f"{sanitize_name(TARGET)}_{sanitize_name(OPTIMIZER)}_VQE_results.pkl")
     out_path = os.path.join(args.out_dir, file_name)
+    checkpoint_path = out_path + ".partial"
+    
+    mol_res = run_one_molecule(args.molecule, spec, checkpoint_path =checkpoint_path)
+    payload = {args.molecule: mol_res}
+
+    validate_payload(payload)
+
     save_pkl(payload, out_path)
+    
+    if os.path.exists(checkpoint_path):
+        os.remove(checkpoint_path)
     print(f"[DONE] Saved -> {out_path}", flush=True)
-
-
+    print(f"[SAVE ] {len(spec.get('valid_active_spaces', []))} spaces to run -> {out_path}", flush=True)
+    
 if __name__ == "__main__":
     main()
     
