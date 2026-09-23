@@ -73,7 +73,9 @@ Molecules, geometries and active spaces are in `config/molecules_data.py`.
 
 Output is one pkl file per molecule in `pkl_results/mimiq_exaqt/`, for example
 
-    16_SEP_2026_Ethylene_cc-pVDZ_exaqt_COBYLA_VQE_results.pkl
+    16_SEP_2026_Ethylene_cc-pVDZ_exaqt-cpu_COBYLA_VQE_results.pkl
+
+`exaqt-cpu` says where it ran, like `qpp-cpu` or `nvidia` in the CUDA-Q file names.
 
 The layout of the pkl is the same as in the CUDA-Q version, so the same
 analysis scripts can read both.
@@ -100,12 +102,18 @@ Every VQE starts from the CCSD amplitudes. If CCSD does not converge, the run st
 
 For each molecule:
 
-1. SCF (RHF) and CCSD with PySCF on the full molecule, cc-pVDZ.
+1. SCF (RHF) and CCSD with PySCF on the full molecule (cc-pVDZ unless `--basis`
+   says otherwise). CCSD must converge, otherwise the run stops.
 
 Then for each active space:
 
 2. CASCI with PySCF, used as the reference energy.
 3. Active space Hamiltonian from OpenFermion, Jordan-Wigner mapping.
+
+With `--integrals`, steps 1 to 3 come from the saved file instead: the CASCI
+energy is read, the Hamiltonian is built from the stored integrals
+(`qubit_hamiltonian` in `src/integrals.py`), and the CCSD amplitudes for step 5
+are the ones stored for that active space.
 4. Convert the OpenFermion QubitOperator to a MIMIQ Hamiltonian. The identity
    term is taken out as a constant. (`src/mimiq_hamiltonian.py`)
 5. Starting parameters: the CCSD amplitudes are cut to the active space and
@@ -143,7 +151,7 @@ PubChem, as recorded in `config/molecules_data.py`.
 | Adenine | C5H5N5 | 70 | 165 | PubChem |
 | Guanine | C5H5N5O | 78 | 179 | PubChem |
 
-Each molecule has 9 active spaces, from 6 to 14 qubits, written as
+Each molecule has the same 9 active spaces, from 6 to 14 qubits, written as
 (active electrons, active orbitals):
 
     6 qubits    (2,3) (4,3)
@@ -151,8 +159,6 @@ Each molecule has 9 active spaces, from 6 to 14 qubits, written as
     10 qubits   (4,5) (6,5)
     12 qubits   (6,6)
     14 qubits   (6,7)
-
-Ethylene also has (8,5) and Pentacene also has (4,6), so they have 10.
 
 The core orbitals below the active space are frozen. The number of core
 orbitals for each space is `ncore` in `config/molecules_data.py`.
@@ -162,15 +168,19 @@ run by this code.
 
 ## Tests
 
-    pytest tests/test_ansatz.py tests/test_driver.py tests/test_theta0.py
+    pytest tests/test_ansatz.py tests/test_driver.py tests/test_theta0.py tests/test_integrals.py
 
 - `test_ansatz.py`: H2. Zero parameters give the Hartree-Fock energy, the CCSD
   start is below Hartree-Fock and recovers most of the correlation, VQE
   converges to FCI.
-- `test_driver.py`: the full optimisation loop on H2, and the ansatz builder
-  with sparse parameters.
+- `test_driver.py`: the full optimisation loop on H2 from the CCSD start, and
+  the ansatz builder with sparse parameters.
 - `test_theta0.py`: the CCSD packing gives back the same cluster operator, and
   the CCSD start is below Hartree-Fock on LiH.
+- `test_integrals.py`: Ethylene sto-3g. A saved file gives the same Hamiltonian
+  and CCSD start as the geometry route, VQE from the file alone reaches CASCI,
+  bad files are refused, and missing files or amplitudes are made, saved and
+  reused. It runs several VQEs, so it takes a few minutes.
 
 `tests/test_hamiltonian_bridge.py` compares the spectrum of the MIMIQ
 Hamiltonian with OpenFermion. It has a LiH case that takes a long time.
@@ -185,6 +195,9 @@ Hamiltonian with OpenFermion. It has a LiH case that takes a long time.
     src/mimiq_driver.py          COBYLA optimisation loop
     src/schema.py                checks the result before saving
     src/utils.py                 file names, pkl save, stable hash for seeding
+    src/integrals.py             active space integrals and CCSD amplitudes: make, save, load
+    scripts/dump_active_integrals.py   make the integral files for all molecules
+    integrals/                   saved integral files (see integrals/README.md)
     tests/                       tests
     env/                         conda environment files
 
