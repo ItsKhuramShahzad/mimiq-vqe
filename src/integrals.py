@@ -12,6 +12,9 @@ amplitudes cut to the active space (t1_active, t2_active), which are the VQE
 starting point, so a VQE run needs nothing but the file.
 """
 
+import glob
+import os
+
 import numpy as np
 import pyscf
 from openfermion import InteractionOperator, get_fermion_operator, jordan_wigner
@@ -130,3 +133,31 @@ def qubit_hamiltonian(data):
         data["h1"], np.asarray(data["eri"].transpose(0, 2, 3, 1), order="C"))
     op = InteractionOperator(data["e_core"], one, 0.5 * two)
     return jordan_wigner(get_fermion_operator(op))
+
+
+def find_integral_file(root, basis, molecule, ncore, nele_cas, norb_cas):
+    
+    """ Path to save file for one active space, e.g
+    Integrals/cc-pvdz/Ethylene/space_05_ncore_6_nele_4_norb_3.npz
+    """
+    
+    pattern = os.path.join(root, basis, molecule, f"space_*_ncore_{ncore}_nele_{nele_cas}_norb_{norb_cas}.npz")
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"No integral file found for {molecule} in {basis} with ncore={ncore}, nele_cas={nele_cas}, norb_cas={norb_cas}")
+    if len(matches) > 1:
+        raise RuntimeError(f"Multiple integral files found for {molecule} in {basis} with ncore={ncore}, nele_cas={nele_cas}, norb_cas={norb_cas}: {matches}")
+    return matches[0]
+
+def load_integrals(root, basis, molecule, ncore, nele_cas, norb_cas):
+    """Load an integral file for a one active space and check the file is the one asked for."""
+    path = find_integral_file(root, basis, molecule, ncore, nele_cas, norb_cas)
+    data = load_active_space(path)
+    
+    for key, want in (("molecule", molecule), ("basis", basis)):
+        if key in data and str(data[key]) != want:
+            raise ValueError(f"{path}: {key}={data[key]} does not match the requested {want}")
+    if (data["ncore"], data["nele_cas"], data["norb_cas"]) != (ncore, nele_cas, norb_cas):
+        raise ValueError(f"{path}: (ncore,nele_cas,norb_cas)={data['ncore'],data['nele_cas'],data['norb_cas']} does not match the requested {(ncore, nele_cas, norb_cas)}")
+    data["path"] = path
+    return data

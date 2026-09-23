@@ -33,6 +33,7 @@ from config.molecules_data import molecules
 from src.mimiq_backend import make_energy_fn
 from src.mimiq_driver import best_of_jitters_one_chunk, vqe_until_converged
 from src.mimiq_hamiltonian import openfermion_to_mimiq_hamiltonian
+from src.integrals import load_integrals, qubit_hamiltonian
 from src.schema import validate_payload
 from src.utils import _stable_hash, sanitize_name, save_pkl
 
@@ -197,13 +198,8 @@ def backend_versions():
 # -----------------------------
 # Run one molecule
 # -----------------------------
-def run_one_molecule(mol_name, spec, checkpoint_path=None):
-    mol_name_clean = sanitize_name(mol_name)
-
-    if int(spec["multiplicity"]) != 1 or int(spec["Total Electrons"]) % 2 != 0:
-        return {"molecule_name": mol_name, "skipped": True,
-                "skip_reason": "open-shell or odd electrons: out of scope"}
-
+def setup_from_geometry(spec):
+    """SCF and CCSD on the whole molecule, from the geometry (the original route)."""
     moldata = openfermion.MolecularData(
         spec["geometry"], BASIS, int(spec["multiplicity"]), int(spec["charge"]))
     t0 = time.time()
@@ -239,6 +235,57 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None):
         except Exception as e:
             ccsd_block.update({"computed": False, "note": f"CCSD failed: {e!r}"})
 
+    return dict(molecule=molecule, mf=mf, nelec=int(mf.mol.nelectron), nmo=int(nmo),
+                e_hf=HF_FULL, e_ccsd=E_CCSD_FULL, ccsd_block=ccsd_block,
+                pyscf_info=pyscf_info, t1=t1amp, t2=t2amp, scf_seconds=float(t1 - t0))
+
+
+def setup_from_integrals(mol_name, spec, integrals_dir):
+    """Same information, read from the saved integral files: no SCF, no CCSD here.
+    The amplitudes are per active space, so they are read inside the loop."""
+    first = None
+    for space in spec["valid_active_spaces"]:
+        try:
+            first = load_integrals(integrals_dir, BASIS, mol_name, int(space["ncore"]),
+                                   int(space["nele_cas"]), int(space["norb_cas"]))
+            break
+        except FileNotFoundError:
+            continue
+    if first is None:
+        raise FileNotFoundError(f"no integral files for {mol_name} / {BASIS} under {integrals_dir}")
+
+    e_ccsd = first.get("e_ccsd")
+    ccsd_block = {"computed": e_ccsd is not None,
+                  "E_ccsd_total": e_ccsd,
+                  "E_ccsd_corr": (e_ccsd - first["e_hf"]) if e_ccsd is not None else None,
+                  "t1_norm": None, "t2_norm": None,
+                  "note": "read from integral files; amplitudes stored per active space only."}
+    return dict(molecule=None, mf=None, nelec=first["n_electrons"], nmo=int(first["nmo"]),
+                e_hf=first["e_hf"], e_ccsd=e_ccsd, ccsd_block=ccsd_block,
+                pyscf_info={"source": f"integral files: {integrals_dir}"},
+                t1=None, t2=None, scf_seconds=0.0)
+
+
+def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
+    mol_name_clean = sanitize_name(mol_name)
+
+    if int(spec["multiplicity"]) != 1 or int(spec["Total Electrons"]) % 2 != 0:
+        return {"molecule_name": mol_name, "skipped": True,
+                "skip_reason": "open-shell or odd electrons: out of scope"}
+
+    if integrals_dir is None:
+        setup = setup_from_geometry(spec)
+    else:
+        setup = setup_from_integrals(mol_name, spec, integrals_dir)
+
+    molecule, mf = setup["molecule"], setup["mf"]
+    nelec, nmo = setup["nelec"], setup["nmo"]
+    nocc = nelec // 2
+    nvir = nmo - nocc
+    HF_FULL, E_CCSD_FULL = setup["e_hf"], setup["e_ccsd"]
+    ccsd_block, pyscf_info = setup["ccsd_block"], setup["pyscf_info"]
+    t1amp, t2amp = setup["t1"], setup["t2"]
+
     molecule_results = {
         "molecule_name": mol_name,
         "molecule_name_clean": mol_name_clean,
@@ -251,7 +298,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None):
         "optimizer": OPTIMIZER,
         "seed": int(SEED),
         "input_spec": spec,
-        "timing": {"pyscf_run_scf_seconds": float(t1 - t0)},
+        "timing": {"pyscf_run_scf_seconds": setup["scf_seconds"]},
         "references": {"E_hf_full": HF_FULL, "E_ccsd_full": E_CCSD_FULL},
         "pyscf_insights": pyscf_info,
         "ccsd": ccsd_block,
@@ -278,11 +325,11 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None):
                 "skip_reason": f"active indices exceed nmo={nmo}"})
             continue
 
-        if (2 * ncore + nele_cas) != int(mf.mol.nelectron):
+        if (2 * ncore + nele_cas) != nelec:
             molecule_results["active_space_runs"].append({
                 "space": space, "skipped": True,
                 "skip_reason": (f"CASCI sanity fail: 2*ncore+nele_cas="
-                                f"{2 * ncore + nele_cas} != nelec={mf.mol.nelectron}")})
+                                f"{2 * ncore + nele_cas} != nelec={nelec}")})
             continue
 
         print(f"[SPACE] {mol_name} ncore={ncore} nele={nele_cas} norb={norb_cas} "
@@ -290,13 +337,18 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None):
 
 
 
-        casci = mcscf.CASCI(mf, norb_cas, nele_cas)
-        casci.ncore = ncore
-        E_CASCI = float(casci.kernel()[0])
+        if integrals_dir is None:
+            casci = mcscf.CASCI(mf, norb_cas, nele_cas)
+            casci.ncore = ncore
+            E_CASCI = float(casci.kernel()[0])
+            molecular_ham = molecule.get_molecular_hamiltonian(
+                occupied_indices=occ, active_indices=act)
+            qop = jordan_wigner(get_fermion_operator(molecular_ham))
+        else:
+            data = load_integrals(integrals_dir, BASIS, mol_name, ncore, nele_cas, norb_cas)
+            E_CASCI = data["e_casci"]
+            qop = qubit_hamiltonian(data)
 
-        molecular_ham = molecule.get_molecular_hamiltonian(
-            occupied_indices=occ, active_indices=act)
-        qop = jordan_wigner(get_fermion_operator(molecular_ham))
         H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
 
         # constant=0.0: the driver works with E_nc, c0 is added below.
@@ -305,7 +357,13 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None):
 
         expected = int(uccsd_singlet_paramsize(qubit_count, nele_cas))
 
-        if t1amp is not None and t2amp is not None:
+        if integrals_dir is not None:
+            if "t1_active" not in data:
+                raise ValueError(f"{data['path']} has no CCSD amplitudes; "
+                                 f"regenerate it with --ccsd")
+            theta0 = pack_ccsd_singlet(data["t1_active"], data["t2_active"], scale=THETA_SCALE)
+            theta0_source = "CCSD-sliced (singlet packer, from integral file)"
+        elif t1amp is not None and t2amp is not None:
             t1_act, t2_act = slice_ccsd_to_active(t1amp, t2amp, nocc, act)
             theta0 = pack_ccsd_singlet(t1_act, t2_act, scale=THETA_SCALE)
             if len(theta0) != expected:
@@ -435,6 +493,9 @@ def main():
     parser.add_argument("--optimizer", default=OPTIMIZER)
     parser.add_argument("--out_dir", default="pkl_results/mimiq_exaqt")
     parser.add_argument("--space_idx", type=int, default=None)
+    parser.add_argument("--integrals", default=None,
+                        help="read Hamiltonian, reference energies and CCSD amplitudes "
+                             "from this integrals folder instead of running PySCF")
     args = parser.parse_args()
 
     BASIS = args.basis
@@ -459,7 +520,8 @@ def main():
     out_path = os.path.join(args.out_dir, file_name)
     checkpoint_path = out_path + ".partial"
     
-    mol_res = run_one_molecule(args.molecule, spec, checkpoint_path =checkpoint_path)
+    mol_res = run_one_molecule(args.molecule, spec, checkpoint_path=checkpoint_path,
+                               integrals_dir=args.integrals)
     payload = {args.molecule: mol_res}
 
     validate_payload(payload)
@@ -469,8 +531,8 @@ def main():
     if os.path.exists(checkpoint_path):
         os.remove(checkpoint_path)
     print(f"[DONE] Saved -> {out_path}", flush=True)
-    print(f"[SAVE ] {len(spec.get('valid_active_spaces', []))} spaces to run -> {out_path}", flush=True)
-    
+
+
 if __name__ == "__main__":
     main()
     

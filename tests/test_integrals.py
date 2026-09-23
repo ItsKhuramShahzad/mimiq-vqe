@@ -136,3 +136,58 @@ def test_rejects_wrong_amplitude_shape(saved_file_ccsd, tmp_path):
     np.savez_compressed(bad, **data)
     with pytest.raises(ValueError, match="amplitude"):
         load_active_space(bad)
+
+
+# ---------------------------------------------------------------------------
+# run_single.py reading the files instead of running PySCF (--integrals)
+# ---------------------------------------------------------------------------
+
+import os
+
+import src.run_single as run_single
+from src.integrals import find_integral_file, load_integrals
+
+
+@pytest.fixture(scope="module")
+def integral_tree(tmp_path_factory):
+    """A small <root>/<basis>/<molecule>/ tree, laid out as the dump script writes it."""
+    root = tmp_path_factory.mktemp("tree")
+    mol_dir = root / BASIS / NAME
+    mol_dir.mkdir(parents=True)
+    mf = run_scf(molecules[NAME], BASIS)
+    ccsd = run_ccsd(mf)
+    data = compute_active_space(mf, NCORE, NELE, NORB, ccsd=ccsd)
+    save_active_space(mol_dir / f"space_01_ncore_{NCORE}_nele_{NELE}_norb_{NORB}.npz",
+                      data, molecule=NAME, basis=BASIS)
+    return str(root)
+
+
+def test_load_integrals_finds_the_file(integral_tree):
+    data = load_integrals(integral_tree, BASIS, NAME, NCORE, NELE, NORB)
+    assert os.path.basename(data["path"]).startswith("space_01_")
+    assert (data["ncore"], data["nele_cas"], data["norb_cas"]) == (NCORE, NELE, NORB)
+    assert "t1_active" in data
+
+
+def test_load_integrals_complains_when_the_space_is_missing(integral_tree):
+    with pytest.raises(FileNotFoundError):
+        find_integral_file(integral_tree, BASIS, NAME, NCORE, NELE, NORB + 1)
+
+
+def test_run_single_from_files_matches_geometry(integral_tree, monkeypatch):
+    """--integrals must give the same energies as the geometry route, with no SCF."""
+    monkeypatch.setattr(run_single, "BASIS", BASIS)
+    spec = dict(molecules[NAME])
+    spec["valid_active_spaces"] = [{"ncore": NCORE, "nele_cas": NELE, "norb_cas": NORB}]
+
+    from_geom = run_single.run_one_molecule(NAME, spec)
+    from_file = run_single.run_one_molecule(NAME, spec, integrals_dir=integral_tree)
+
+    g = from_geom["active_space_runs"][0]
+    f = from_file["active_space_runs"][0]
+    assert abs(g["theta0"]["E_theta0"] - f["theta0"]["E_theta0"]) < 1e-9
+    assert abs(g["casci"]["E_casci_total"] - f["casci"]["E_casci_total"]) < 1e-9
+    assert abs(g["vqe"]["E_total"] - f["vqe"]["E_total"]) < 1e-6
+    assert abs(from_geom["references"]["E_hf_full"] - from_file["references"]["E_hf_full"]) < 1e-9
+    assert "from integral file" in f["theta0"]["source"]
+    assert from_file["timing"]["pyscf_run_scf_seconds"] == 0.0
