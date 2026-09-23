@@ -27,9 +27,13 @@ Some active spaces do not exist in sto-3g because the basis has too few orbitals
 (NH2- has only 7 in sto-3g, so 4 of its 9 spaces are missing there).
 
 **Status:**
-- Pentacene in cc-pVDZ is not included yet.
-- The CCSD amplitudes (`t1_active`, `t2_active`, `e_ccsd`) are not in the current files. They
-  will be added when the set is regenerated with `--ccsd`.
+- CCSD amplitudes (`t1_active`, `t2_active`, `e_ccsd`) are included for 10 molecules, all three
+  basis sets (266 files): NH2-, Ethylene, Methanamide, Benzene, Naphthalene, Uracil, Cytosine,
+  Thymine, Adenine, Guanine.
+- Benzaanthracene and Pentacene have the integrals but no amplitudes yet, and Pentacene in
+  cc-pVDZ is not included yet. They are being regenerated with `--ccsd`.
+- `python -m src.run_single --integrals` computes and saves the amplitudes itself for a file
+  that does not have them, so the files without amplitudes can already be used.
 
 ## What is in each file
 
@@ -153,3 +157,5 @@ checked when it was written: the CASCI energy rebuilt from the saved `h1`, `eri`
 - The cc-pVDZ files reproduce the CASCI and Hartree-Fock energies of independent
   earlier CUDA-Q runs (different machine and PySCF version) to 4e-12 Ha.
 - VQE run on MIMIQ and on CUDA-Q from a file alone reaches the stored CASCI energy.
+- The files with amplitudes were regenerated on a different machine; their integrals and
+  energies equal the earlier files without amplitudes to 4e-12 Ha.
