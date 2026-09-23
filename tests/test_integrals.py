@@ -44,14 +44,17 @@ def test_file_matches_pipeline_hamiltonian(saved_file):
     assert diff < 1e-10
 
 
-def test_vqe_from_file_alone(saved_file):
-    data = load_active_space(saved_file)
+def test_vqe_from_file_alone(saved_file_ccsd):
+    path, _, _ = saved_file_ccsd
+    data = load_active_space(path)
     H, c0, _ = openfermion_to_mimiq_hamiltonian(qubit_hamiltonian(data))
     energy_fn, _ = make_energy_fn(H, constant=0.0, n_qubits=2 * NORB, n_electrons=NELE)
-    theta0 = np.zeros(uccsd_singlet_paramsize(2 * NORB, NELE))
 
-    assert abs(c0 + energy_fn(theta0) - data["e_hf"]) < 1e-10
+    # all angles zero is the Hartree-Fock state: a check of the Hamiltonian, not a start point
+    hf_angles = np.zeros(uccsd_singlet_paramsize(2 * NORB, NELE))
+    assert abs(c0 + energy_fn(hf_angles) - data["e_hf"]) < 1e-10
 
+    theta0 = pack_ccsd_singlet(data["t1_active"], data["t2_active"])
     out = vqe_until_converged(energy_fn, theta0, np.random.default_rng(0))
     assert abs(c0 + out["E_nc_opt"] - data["e_casci"]) < 1e-8
 
@@ -143,6 +146,7 @@ def test_rejects_wrong_amplitude_shape(saved_file_ccsd, tmp_path):
 # ---------------------------------------------------------------------------
 
 import os
+import shutil
 
 import src.run_single as run_single
 from src.integrals import find_integral_file, load_integrals
@@ -191,3 +195,80 @@ def test_run_single_from_files_matches_geometry(integral_tree, monkeypatch):
     assert abs(from_geom["references"]["E_hf_full"] - from_file["references"]["E_hf_full"]) < 1e-9
     assert "from integral file" in f["theta0"]["source"]
     assert from_file["timing"]["pyscf_run_scf_seconds"] == 0.0
+
+
+# A space with no file in integral_tree: 2*7 + 2 = 16 electrons, 4 qubits, fast.
+MISSING = {"ncore": 7, "nele_cas": 2, "norb_cas": 2}
+
+
+def test_missing_space_is_made_saved_and_reused(integral_tree, tmp_path, monkeypatch):
+    """One file present, one missing: the missing one is computed, saved next to the
+    others, and a later run reads it without running SCF again."""
+    monkeypatch.setattr(run_single, "BASIS", BASIS)
+    root = tmp_path / "tree"
+    shutil.copytree(integral_tree, root)
+    spec = dict(molecules[NAME])
+    spec["valid_active_spaces"] = [{"ncore": NCORE, "nele_cas": NELE, "norb_cas": NORB}, MISSING]
+
+    res = run_single.run_one_molecule(NAME, spec, integrals_dir=str(root))
+    for run in res["active_space_runs"]:
+        assert not run.get("skipped")
+        assert "from integral file" in run["theta0"]["source"]
+        assert abs(run["vqe"]["E_total"] - run["casci"]["E_casci_total"]) < 1e-6
+    assert len(res["integral_files_made"]) == 1
+    assert res["timing"]["pyscf_run_scf_seconds"] > 0.0
+
+    made = res["integral_files_made"][0]
+    assert os.path.exists(made)
+    assert "t1_active" in load_active_space(made)          # integrals and amplitudes together
+    assert not [f for f in os.listdir(os.path.dirname(made)) if f.startswith(".")]  # no temp left
+
+    again = run_single.IntegralFiles(str(root), NAME, spec)
+    again.get(MISSING["ncore"], MISSING["nele_cas"], MISSING["norb_cas"])
+    assert again.made == [] and again.mf is None
+
+
+def test_made_file_equals_dump_script_file(integral_tree, tmp_path, monkeypatch):
+    """A file made by run_single is the same file the dump script would have written."""
+    monkeypatch.setattr(run_single, "BASIS", BASIS)
+    spec = dict(molecules[NAME])
+    files = run_single.IntegralFiles(str(tmp_path), NAME, spec)
+    made = files.get(NCORE, NELE, NORB)
+    dumped = load_integrals(integral_tree, BASIS, NAME, NCORE, NELE, NORB)
+    for key in ("h1", "eri", "t1_active", "t2_active"):
+        assert np.allclose(made[key], dumped[key], atol=1e-10)
+    for key in ("e_core", "e_hf", "e_casci", "e_ccsd"):
+        assert abs(made[key] - dumped[key]) < 1e-10
+
+
+def test_molecule_with_no_files_makes_them(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_single, "BASIS", BASIS)
+    spec = dict(molecules[NAME])
+    spec["valid_active_spaces"] = [MISSING]
+
+    res = run_single.run_one_molecule(NAME, spec, integrals_dir=str(tmp_path))
+    run = res["active_space_runs"][0]
+    assert not run.get("skipped")
+    assert abs(run["vqe"]["E_total"] - run["casci"]["E_casci_total"]) < 1e-6
+    assert len(res["integral_files_made"]) == 1
+    assert "t1_active" in load_active_space(res["integral_files_made"][0])
+    assert "from integral file" in run["theta0"]["source"]
+
+
+def test_file_without_amplitudes_is_recomputed(tmp_path, monkeypatch):
+    """Integrals saved without --ccsd: the amplitudes are computed and the file replaced."""
+    monkeypatch.setattr(run_single, "BASIS", BASIS)
+    mol_dir = tmp_path / BASIS / NAME
+    mol_dir.mkdir(parents=True)
+    mf = run_scf(molecules[NAME], BASIS)
+    old = mol_dir / f"space_01_ncore_{NCORE}_nele_{NELE}_norb_{NORB}.npz"
+    save_active_space(old, compute_active_space(mf, NCORE, NELE, NORB), molecule=NAME, basis=BASIS)
+    assert "t1_active" not in load_active_space(old)
+
+    files = run_single.IntegralFiles(str(tmp_path), NAME, dict(molecules[NAME]))
+    data = files.get(NCORE, NELE, NORB)
+
+    assert "t1_active" in data
+    assert files.made == [str(old)]                        # same name, replaced in place
+    assert "t1_active" in load_active_space(old)
+    assert len(list(mol_dir.glob("space_*.npz"))) == 1

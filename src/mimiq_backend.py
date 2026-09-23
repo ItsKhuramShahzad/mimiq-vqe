@@ -42,9 +42,6 @@ def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None):
               n_electrons= n_electrons,
               params=list(theta))
          circ = circ.decompose()  # Decompose the circuit into basic gates for simulation     
-              
-         
-         # getcState, getgState 
          circ.push_expval(H, *range(H.num_qubits()))  # Add the expectation value measurement for the Hamiltonian
          if abs(constant)>0.0:
               circ.push(Add(2, c=constant), 0, 0)

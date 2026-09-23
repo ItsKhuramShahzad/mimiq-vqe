@@ -33,7 +33,8 @@ from config.molecules_data import molecules
 from src.mimiq_backend import make_energy_fn
 from src.mimiq_driver import best_of_jitters_one_chunk, vqe_until_converged
 from src.mimiq_hamiltonian import openfermion_to_mimiq_hamiltonian
-from src.integrals import load_integrals, qubit_hamiltonian
+from src.integrals import (compute_active_space, find_integral_file, load_integrals,
+                           qubit_hamiltonian, run_ccsd, run_scf, save_active_space)
 from src.schema import validate_payload
 from src.utils import _stable_hash, sanitize_name, save_pkl
 
@@ -42,7 +43,6 @@ from src.utils import _stable_hash, sanitize_name, save_pkl
 BASIS= "cc-pVDZ"
 TARGET= "exaqt"
 OPTIMIZER= "COBYLA"
-RUN_CCSD_REFERENCE= True
 
 SEED =12345
 TOL = 1e-10
@@ -50,6 +50,8 @@ COBYLA_RHOBEG = 0.2
 THETA_SCALE= 1.0
 N_JITTER_RESTARTS= 3 
 JITTER_SCALE= 5E-3
+
+MAX_MEMORY = 16000   # MB, PySCF limit when a missing integral file has to be made
 
 VQE_EPS_E=1E-6
 VQE_PATIENCE=3
@@ -214,45 +216,106 @@ def setup_from_geometry(spec):
     nvir = nmo - nocc
     HF_FULL = float(molecule.hf_energy)
 
-    ccsd_block = {"computed": False, "E_ccsd_total": None, "E_ccsd_corr": None,
-                  "t1_norm": None, "t2_norm": None, "note": None}
-    t1amp = t2amp = None
-    E_CCSD_FULL = None
-
-    if RUN_CCSD_REFERENCE:
-        try:
-            mycc = cc.CCSD(mf)
-            ecc_corr, t1amp, t2amp = mycc.kernel()
-            E_CCSD_FULL = float(mf.e_tot + ecc_corr)
-            ccsd_block.update({
-                "computed": True,
-                "E_ccsd_total": E_CCSD_FULL,
-                "E_ccsd_corr": float(ecc_corr),
-                "t1_norm": float(np.linalg.norm(t1amp)),
-                "t2_norm": float(np.linalg.norm(t2amp)),
-                "note": "CCSD full-system amplitudes used for theta0 slicing.",
-            })
-        except Exception as e:
-            ccsd_block.update({"computed": False, "note": f"CCSD failed: {e!r}"})
+    # Every VQE starts from CCSD amplitudes, so CCSD must run and converge.
+    mycc = cc.CCSD(mf)
+    ecc_corr, t1amp, t2amp = mycc.kernel()
+    if not mycc.converged:
+        raise RuntimeError("CCSD did not converge; no amplitudes to start the VQE from")
+    E_CCSD_FULL = float(mf.e_tot + ecc_corr)
+    ccsd_block = {
+        "computed": True,
+        "E_ccsd_total": E_CCSD_FULL,
+        "E_ccsd_corr": float(ecc_corr),
+        "t1_norm": float(np.linalg.norm(t1amp)),
+        "t2_norm": float(np.linalg.norm(t2amp)),
+        "note": "CCSD full-system amplitudes used for theta0 slicing.",
+    }
 
     return dict(molecule=molecule, mf=mf, nelec=int(mf.mol.nelectron), nmo=int(nmo),
                 e_hf=HF_FULL, e_ccsd=E_CCSD_FULL, ccsd_block=ccsd_block,
                 pyscf_info=pyscf_info, t1=t1amp, t2=t2amp, scf_seconds=float(t1 - t0))
 
 
-def setup_from_integrals(mol_name, spec, integrals_dir):
-    """Same information, read from the saved integral files: no SCF, no CCSD here.
-    The amplitudes are per active space, so they are read inside the loop."""
-    first = None
-    for space in spec["valid_active_spaces"]:
+class IntegralFiles:
+    """The integral files of one molecule: read them, and make the missing ones.
+
+    A missing file is computed the same way scripts/dump_active_integrals.py does it
+    (PySCF CASCI integrals, norb^4 memory, plus CCSD amplitudes), saved where the next
+    run will find it, and then read like any other file. SCF and CCSD run at most once
+    per molecule, and only if some file is actually missing."""
+
+    def __init__(self, root, mol_name, spec):
+        self.root, self.mol_name, self.spec = root, mol_name, spec
+        self.mf = self.ccsd = None
+        self.seconds = 0.0
+        self.made = []
+
+    def get(self, ncore, nele_cas, norb_cas):
+        """The file for this space, with CCSD amplitudes. A missing file, or one saved
+        without amplitudes, is (re)computed and saved first."""
         try:
-            first = load_integrals(integrals_dir, BASIS, mol_name, int(space["ncore"]),
-                                   int(space["nele_cas"]), int(space["norb_cas"]))
-            break
+            data = load_integrals(self.root, BASIS, self.mol_name, ncore, nele_cas, norb_cas)
+            if "t1_active" in data:
+                return data
+            print(f"[MAKE ] {data['path']} has no CCSD amplitudes: recomputing it", flush=True)
         except FileNotFoundError:
+            pass
+        self.make(ncore, nele_cas, norb_cas)
+        return load_integrals(self.root, BASIS, self.mol_name, ncore, nele_cas, norb_cas)
+
+    def make(self, ncore, nele_cas, norb_cas):
+        if self.mf is None:
+            print(f"[MAKE ] {self.mol_name} / {BASIS}: running SCF + CCSD once "
+                  f"to write the missing integral file(s)", flush=True)
+            t0 = time.time()
+            self.mf = run_scf(self.spec, BASIS, MAX_MEMORY)
+            self.ccsd = run_ccsd(self.mf, MAX_MEMORY)
+            self.seconds += time.time() - t0
+
+        data = compute_active_space(self.mf, ncore, nele_cas, norb_cas, ccsd=self.ccsd)
+
+        mol_dir = os.path.join(self.root, BASIS, self.mol_name)
+        os.makedirs(mol_dir, exist_ok=True)
+        try:                        # replacing a file without amplitudes: keep its name
+            path = find_integral_file(self.root, BASIS, self.mol_name, ncore, nele_cas, norb_cas)
+            tag = os.path.basename(path)[:-len(".npz")]
+        except FileNotFoundError:
+            tag = (f"space_{self.number(ncore, nele_cas, norb_cas):02d}"
+                   f"_ncore_{ncore}_nele_{nele_cas}_norb_{norb_cas}")
+            path = os.path.join(mol_dir, tag + ".npz")
+        # write under a private name, then rename: two jobs making the same file at once
+        # can never leave a half-written one where load_integrals looks
+        tmp = os.path.join(mol_dir, f".{tag}.{os.uname().nodename}.{os.getpid()}.npz")
+        save_active_space(tmp, data, molecule=self.mol_name, basis=BASIS,
+                          charge=int(self.spec["charge"]),
+                          multiplicity=int(self.spec["multiplicity"]))
+        os.replace(tmp, path)
+        self.made.append(path)
+        print(f"[MAKE ] saved {path}", flush=True)
+
+    def number(self, ncore, nele_cas, norb_cas):
+        """Same numbering as the dump script: position in the molecule's full list, from 1."""
+        full = molecules.get(self.mol_name, self.spec)["valid_active_spaces"]
+        for i, s in enumerate(full, start=1):
+            if (int(s["ncore"]), int(s["nele_cas"]), int(s["norb_cas"])) == (ncore, nele_cas, norb_cas):
+                return i
+        return 0
+
+
+def setup_from_integrals(files, spec):
+    """Same information as setup_from_geometry, read from the integral files.
+    The amplitudes are per active space, so they are read inside the loop."""
+    spaces = [(int(s["ncore"]), int(s["nele_cas"]), int(s["norb_cas"]))
+              for s in spec["valid_active_spaces"]]
+    first = None
+    for space in spaces:
+        try:
+            first = files.get(*space)
+            break
+        except ValueError:                    # this space does not fit the molecule/basis
             continue
     if first is None:
-        raise FileNotFoundError(f"no integral files for {mol_name} / {BASIS} under {integrals_dir}")
+        raise ValueError(f"no active space of {files.mol_name} fits the {BASIS} basis")
 
     e_ccsd = first.get("e_ccsd")
     ccsd_block = {"computed": e_ccsd is not None,
@@ -262,8 +325,8 @@ def setup_from_integrals(mol_name, spec, integrals_dir):
                   "note": "read from integral files; amplitudes stored per active space only."}
     return dict(molecule=None, mf=None, nelec=first["n_electrons"], nmo=int(first["nmo"]),
                 e_hf=first["e_hf"], e_ccsd=e_ccsd, ccsd_block=ccsd_block,
-                pyscf_info={"source": f"integral files: {integrals_dir}"},
-                t1=None, t2=None, scf_seconds=0.0)
+                pyscf_info={"source": f"integral files: {files.root}"},
+                t1=None, t2=None, scf_seconds=files.seconds)
 
 
 def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
@@ -273,10 +336,13 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         return {"molecule_name": mol_name, "skipped": True,
                 "skip_reason": "open-shell or odd electrons: out of scope"}
 
+    # With --integrals, everything comes from the files; missing ones are made and saved.
+    files = None
     if integrals_dir is None:
         setup = setup_from_geometry(spec)
     else:
-        setup = setup_from_integrals(mol_name, spec, integrals_dir)
+        files = IntegralFiles(integrals_dir, mol_name, spec)
+        setup = setup_from_integrals(files, spec)
 
     molecule, mf = setup["molecule"], setup["mf"]
     nelec, nmo = setup["nelec"], setup["nmo"]
@@ -337,17 +403,20 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 
 
 
-        if integrals_dir is None:
+        data = None
+        if files is not None:
+            data = files.get(ncore, nele_cas, norb_cas)
+            E_CASCI = data["e_casci"]
+            qop = qubit_hamiltonian(data)
+            molecule_results["timing"]["pyscf_run_scf_seconds"] = files.seconds
+            molecule_results["integral_files_made"] = list(files.made)
+        else:
             casci = mcscf.CASCI(mf, norb_cas, nele_cas)
             casci.ncore = ncore
             E_CASCI = float(casci.kernel()[0])
             molecular_ham = molecule.get_molecular_hamiltonian(
                 occupied_indices=occ, active_indices=act)
             qop = jordan_wigner(get_fermion_operator(molecular_ham))
-        else:
-            data = load_integrals(integrals_dir, BASIS, mol_name, ncore, nele_cas, norb_cas)
-            E_CASCI = data["e_casci"]
-            qop = qubit_hamiltonian(data)
 
         H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
 
@@ -357,23 +426,17 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 
         expected = int(uccsd_singlet_paramsize(qubit_count, nele_cas))
 
-        if integrals_dir is not None:
-            if "t1_active" not in data:
-                raise ValueError(f"{data['path']} has no CCSD amplitudes; "
-                                 f"regenerate it with --ccsd")
+        # theta0 always comes from the CCSD amplitudes, never from zeros
+        if data is not None:
             theta0 = pack_ccsd_singlet(data["t1_active"], data["t2_active"], scale=THETA_SCALE)
             theta0_source = "CCSD-sliced (singlet packer, from integral file)"
-        elif t1amp is not None and t2amp is not None:
+        else:
             t1_act, t2_act = slice_ccsd_to_active(t1amp, t2amp, nocc, act)
             theta0 = pack_ccsd_singlet(t1_act, t2_act, scale=THETA_SCALE)
-            if len(theta0) != expected:
-                theta0 = np.zeros(expected)
-                theta0_source = "zeros (ccsd-pack-mismatch)"
-            else:
-                theta0_source = "CCSD-sliced (singlet packer)"
-        else:
-            theta0 = np.zeros(expected)
-            theta0_source = "zeros (CCSD unavailable/off)"
+            theta0_source = "CCSD-sliced (singlet packer)"
+        if len(theta0) != expected:
+            raise RuntimeError(f"CCSD seed has {len(theta0)} parameters, the ansatz needs "
+                               f"{expected} (ncore={ncore}, nele={nele_cas}, norb={norb_cas})")
         E_theta0= float(c0 + energy_fn(theta0))
         corr_active = HF_FULL - E_CASCI
         seed_pct = 100.0* (HF_FULL - E_theta0)/ corr_active if abs(corr_active) > 1e-12 else None
@@ -481,7 +544,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 # CLI, same arguments as the reference
 # -----------------------------
 def main():
-    global BASIS, TARGET, OPTIMIZER
+    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--molecule", required=True)
@@ -495,12 +558,16 @@ def main():
     parser.add_argument("--space_idx", type=int, default=None)
     parser.add_argument("--integrals", default=None,
                         help="read Hamiltonian, reference energies and CCSD amplitudes "
-                             "from this integrals folder instead of running PySCF")
+                             "from this integrals folder instead of running PySCF; "
+                             "missing files are made and saved there")
+    parser.add_argument("--max-memory", type=int, default=MAX_MEMORY,
+                        help="PySCF memory limit in MB when a missing integral file is made")
     args = parser.parse_args()
 
     BASIS = args.basis
     TARGET = args.target
     OPTIMIZER = args.optimizer
+    MAX_MEMORY = args.max_memory
 
     if args.molecule not in molecules:
         raise ValueError(f"Molecule '{args.molecule}' not found!")

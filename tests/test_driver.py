@@ -7,12 +7,14 @@ import pytest
 from openfermion import (MolecularData, get_fermion_operator, get_sparse_operator,
                          jordan_wigner, uccsd_singlet_paramsize)
 from openfermionpyscf import run_pyscf
+from pyscf import cc
 from scipy.sparse.linalg import eigsh
 
 from src.mimiq_ansatz import build_uccsd
 from src.mimiq_backend import make_energy_fn
 from src.mimiq_driver import best_of_jitters_one_chunk, vqe_until_converged
 from src.mimiq_hamiltonian import openfermion_to_mimiq_hamiltonian
+from src.run_single import pack_ccsd_singlet, slice_ccsd_to_active
 from src.utils import _stable_hash
 
 
@@ -23,7 +25,13 @@ def h2():
     qop = jordan_wigner(get_fermion_operator(mol.get_molecular_hamiltonian()))
     H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
     E_exact = eigsh(get_sparse_operator(qop, n_qubits=4), k=1, which="SA")[0][0]
-    return H, c0, E_exact
+
+    # CCSD seed, the same way run_single.py builds it (all orbitals active for H2)
+    mycc = cc.CCSD(mol._pyscf_data["scf"])
+    _, t1, t2 = mycc.kernel()
+    assert mycc.converged
+    theta0 = pack_ccsd_singlet(*slice_ccsd_to_active(t1, t2, 1, [0, 1]))
+    return H, c0, E_exact, theta0
 
 
 def test_sparse_theta_does_not_crash():
@@ -34,10 +42,10 @@ def test_sparse_theta_does_not_crash():
 
 
 def test_driver_reaches_exact_energy(h2):
-    H, c0, E_exact = h2
+    H, c0, E_exact, theta0 = h2
     energy_fn, _ = make_energy_fn(H, constant=0.0, n_qubits=4, n_electrons=2)
     rng = np.random.default_rng(12345 + _stable_hash(("H2", 0, 2, 2)))
-    theta0 = np.zeros(uccsd_singlet_paramsize(4, 2))
+    assert len(theta0) == uccsd_singlet_paramsize(4, 2)
 
     seed = best_of_jitters_one_chunk(energy_fn, theta0, rng, n_restarts=3)
     out = vqe_until_converged(energy_fn, seed["theta_opt"], rng)

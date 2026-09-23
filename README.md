@@ -85,6 +85,17 @@ VQE energy next to CASCI:
     [SEED ] CCSD-sliced (singlet packer): E_theta0=-78.0563945040 ...
     [SPACE] done E_VQE=-78.0574268190 E_CASCI=-78.0574268190 diff=-4.83e-13 cycles=3 t=14.6s
 
+From saved integral files, instead of running PySCF in the job:
+
+    python -m src.run_single --molecule Ethylene --integrals integrals
+
+Files are read from `<folder>/<basis>/<molecule>/space_*_ncore_C_nele_E_norb_O.npz`
+(see `integrals/README.md`). If a file is missing, or has no CCSD amplitudes, it is
+computed (integrals and amplitudes), saved there, and used; later runs read it.
+`--max-memory` sets the PySCF memory limit in MB for this.
+
+Every VQE starts from the CCSD amplitudes. If CCSD does not converge, the run stops.
+
 ## How it works
 
 For each molecule:
