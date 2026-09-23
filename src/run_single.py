@@ -41,7 +41,7 @@ from src.utils import _stable_hash, sanitize_name, save_pkl
 # same constants as the cuda-q script
 
 BASIS= "cc-pVDZ"
-TARGET= "exaqt"
+TARGET= "exaqt-cpu"   # like CUDA-Q's "qpp-cpu": backend and device, used in the PKL name
 OPTIMIZER= "COBYLA"
 
 SEED =12345
@@ -549,7 +549,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--molecule", required=True)
     parser.add_argument("--basis", default=BASIS)
-    parser.add_argument("--target", default=TARGET)
+    # The target goes into the PKL name, so it must say where the run really happened.
+    # ExaqtQCS() in src/mimiq_backend.py runs on the CPU; add a choice only with a real backend.
+    parser.add_argument("--target", default=TARGET, choices=["exaqt-cpu"])
     parser.add_argument("--precision", default="default",
                         choices=["default", "fp32", "fp64"],
                         help="accepted for CLI parity with CUDA-Q; ignored on MIMIQ")
