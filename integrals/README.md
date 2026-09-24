@@ -18,7 +18,7 @@ Ethylene, cc-pVDZ, 6 frozen core orbitals, 4 electrons in 3 active orbitals (6 q
 Identify a space by `ncore`, `nele` and `norb`, not by `NN`.
 
 - **Basis sets:** `sto-3g`, `6-31g`, `cc-pVDZ`
-- **Molecules:** NH2-, Ethylene, Methanamide, Benzene, Naphthalene, Benzaanthracene,
+- **Molecules:** NH2-, Ethylene, Methanamide, Benzene, Naphthalene, Tetracene,
   Pentacene, Uracil, Cytosine, Thymine, Adenine, Guanine
 - **Geometries:** from `config/molecules_data.py` (NIST CCCBDB or PubChem)
 - **Active spaces:** 9 per molecule, 6 to 14 qubits
@@ -27,13 +27,8 @@ Some active spaces do not exist in sto-3g because the basis has too few orbitals
 (NH2- has only 7 in sto-3g, so 4 of its 9 spaces are missing there).
 
 **Status:**
-- CCSD amplitudes (`t1_active`, `t2_active`, `e_ccsd`) are included for 10 molecules, all three
-  basis sets (266 files): NH2-, Ethylene, Methanamide, Benzene, Naphthalene, Uracil, Cytosine,
-  Thymine, Adenine, Guanine.
-- Benzaanthracene and Pentacene have the integrals but no amplitudes yet, and Pentacene in
-  cc-pVDZ is not included yet. They are being regenerated with `--ccsd`.
-- `python -m src.run_single --integrals` computes and saves the amplitudes itself for a file
-  that does not have them, so the files without amplitudes can already be used.
+- All 311 files include the CCSD amplitudes (`t1_active`, `t2_active`, `e_ccsd`).
+- Pentacene in cc-pVDZ is not included yet; it is still being computed.
 
 ## What is in each file
 

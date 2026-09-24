@@ -143,7 +143,7 @@ PubChem, as recorded in `config/molecules_data.py`.
 | Methanamide | CHONH2 | 24 | 57 | |
 | Benzene | C6H6 | 42 | 114 | NIST CCCBDB |
 | Naphthalene | C10H8 | 68 | 180 | NIST CCCBDB |
-| Benzaanthracene | C18H12 | 120 | 312 | NIST CCCBDB |
+| Tetracene  | C18H12 | 120 | 312 | NIST CCCBDB |
 | Pentacene | C22H14 | 146 | 378 | PubChem |
 | Uracil | C4H4N2O2 | 58 | 132 | PubChem |
 | Cytosine | C4H5N3O | 58 | 137 | PubChem |

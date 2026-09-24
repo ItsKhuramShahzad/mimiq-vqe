@@ -186,7 +186,7 @@ molecules= {
    {'ncore': 19, 'nele_cas': 4, 'norb_cas': 5},
    {'ncore': 20, 'nele_cas': 2, 'norb_cas': 3},
    {'ncore': 20, 'nele_cas': 2, 'norb_cas': 4}]},
- 'Benzaanthracene': {'formula': 'C18H12',
+ 'Tetracene': {'formula': 'C18H12',
   'canonical_formula': 'C18H12',
   'name': 'tetracene',
   'iupac_name': 'tetracene',
