@@ -27,8 +27,8 @@ Some active spaces do not exist in sto-3g because the basis has too few orbitals
 (NH2- has only 7 in sto-3g, so 4 of its 9 spaces are missing there).
 
 **Status:**
-- All 311 files include the CCSD amplitudes (`t1_active`, `t2_active`, `e_ccsd`).
-- Pentacene in cc-pVDZ is not included yet; it is still being computed.
+- Complete: all 12 molecules in all three basis sets, 320 files, every one with the CCSD
+  amplitudes (`t1_active`, `t2_active`, `e_ccsd`).
 
 ## What is in each file
 
