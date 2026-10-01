@@ -571,7 +571,9 @@ def main():
                         choices=["default", "fp32", "fp64"],
                         help="accepted for CLI parity with CUDA-Q; ignored on MIMIQ")
     parser.add_argument("--optimizer", default=OPTIMIZER)
-    parser.add_argument("--out_dir", default="pkl_results/mimiq_exaqt")
+    parser.add_argument("--out_dir", default=None,
+                        help="default: pkl_results/mimiq_exaqt_<ansatz>")
+
     parser.add_argument("--space_idx", type=int, default=None)
     parser.add_argument("--integrals", default=None,
                         help="read Hamiltonian, reference energies and CCSD amplitudes "
@@ -598,11 +600,16 @@ def main():
             raise ValueError(f"--space_idx {args.space_idx} out of range (0-{len(spaces) - 1})")
         spec["valid_active_spaces"] = [spaces[args.space_idx]]
 
+    if args.out_dir is None:
+        args.out_dir = f"pkl_results/mimiq_exaqt_uccsd_{ANSATZ}"
+
     os.makedirs(args.out_dir, exist_ok=True)
     print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER} | ANSATZ={ANSATZ}", flush=True)
     tag = time.strftime("%d_%b_%Y").upper()
+    ansatz_tag = "uccsd_spin" if ANSATZ == "spin" else "uccsd_singlet"
+    
     file_name = (f"{tag}_{sanitize_name(args.molecule)}_{sanitize_name(BASIS)}_"
-                 f"{sanitize_name(TARGET)}_{sanitize_name(OPTIMIZER)}_VQE_results.pkl")
+                 f"{sanitize_name(TARGET)}_{sanitize_name(OPTIMIZER)}_{ansatz_tag}_VQE_results.pkl")
     out_path = os.path.join(args.out_dir, file_name)
     checkpoint_path = out_path + ".partial"
     
