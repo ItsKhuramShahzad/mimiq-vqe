@@ -38,12 +38,14 @@ from src.integrals import (compute_active_space, find_integral_file, load_integr
 from src.schema import validate_payload
 from src.utils import _stable_hash, sanitize_name, save_pkl
 
+from src.mimiq_ansatz import  build_uccsd, build_uccsd_spin, singlet_to_spin_params, spin_excitations
+
 # same constants as the cuda-q script
 
 BASIS= "cc-pVDZ"
 TARGET= "exaqt-cpu"   # like CUDA-Q's "qpp-cpu": backend and device, used in the PKL name
 OPTIMIZER= "COBYLA"
-
+ANSATZ = "singlet" # 'singlet': 90 parameters at 14q; 'spin': 204 parameters at 14q; same is cuda-q
 SEED =12345
 TOL = 1e-10
 COBYLA_RHOBEG = 0.2
@@ -362,6 +364,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         "target_precision_option": None,
         "cudaq_precision": None,
         "optimizer": OPTIMIZER,
+        "ansatz": ANSATZ,
         "seed": int(SEED),
         "input_spec": spec,
         "timing": {"pyscf_run_scf_seconds": setup["scf_seconds"]},
@@ -419,12 +422,17 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
             qop = jordan_wigner(get_fermion_operator(molecular_ham))
 
         H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
+        # the circuit builder for chosen ansatz 
+        builder = build_uccsd_spin if ANSATZ =="spin" else build_uccsd
 
         # constant=0.0: the driver works with E_nc, c0 is added below.
         energy_fn, execute_times  = make_energy_fn(
-            H, constant=0.0, n_qubits=qubit_count, n_electrons=nele_cas)
-
-        expected = int(uccsd_singlet_paramsize(qubit_count, nele_cas))
+            H, constant=0.0, n_qubits=qubit_count, n_electrons=nele_cas, ansatz=builder)
+        if ANSATZ == "spin":
+            expected = len(spin_excitations(qubit_count, nele_cas))
+        else :
+            expected = int(uccsd_singlet_paramsize(qubit_count, nele_cas))
+        
 
         # theta0 always comes from the CCSD amplitudes, never from zeros
         if data is not None:
@@ -434,6 +442,13 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
             t1_act, t2_act = slice_ccsd_to_active(t1amp, t2amp, nocc, act)
             theta0 = pack_ccsd_singlet(t1_act, t2_act, scale=THETA_SCALE)
             theta0_source = "CCSD-sliced (singlet packer)"
+            
+        # spin orbital ansatz : the same T -T^dagger , one parameters per spin orbital excitaiton
+        
+        if ANSATZ == "spin":
+            theta0 = singlet_to_spin_params(theta0, qubit_count, nele_cas)
+            theta0_source+= ", mapped to spin orbital excitations"
+            
         if len(theta0) != expected:
             raise RuntimeError(f"CCSD seed has {len(theta0)} parameters, the ansatz needs "
                                f"{expected} (ncore={ncore}, nele={nele_cas}, norb={norb_cas})")
@@ -544,7 +559,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 # CLI, same arguments as the reference
 # -----------------------------
 def main():
-    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY
+    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY, ANSATZ
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--molecule", required=True)
@@ -564,13 +579,15 @@ def main():
                              "missing files are made and saved there")
     parser.add_argument("--max-memory", type=int, default=MAX_MEMORY,
                         help="PySCF memory limit in MB when a missing integral file is made")
+    parser.add_argument("--ansatz", default=ANSATZ, choices=["singlet", "spin"],
+                        help="mimiq ansatz type: singlet (90 params at 14q) or spin (4 params at 14q); same as CUDA-Q")
     args = parser.parse_args()
 
     BASIS = args.basis
     TARGET = args.target
     OPTIMIZER = args.optimizer
     MAX_MEMORY = args.max_memory
-
+    ANSATZ = args.ansatz
     if args.molecule not in molecules:
         raise ValueError(f"Molecule '{args.molecule}' not found!")
 
@@ -582,7 +599,7 @@ def main():
         spec["valid_active_spaces"] = [spaces[args.space_idx]]
 
     os.makedirs(args.out_dir, exist_ok=True)
-    print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER}", flush=True)
+    print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER} | ANSATZ={ANSATZ}", flush=True)
     tag = time.strftime("%d_%b_%Y").upper()
     file_name = (f"{tag}_{sanitize_name(args.molecule)}_{sanitize_name(BASIS)}_"
                  f"{sanitize_name(TARGET)}_{sanitize_name(OPTIMIZER)}_VQE_results.pkl")

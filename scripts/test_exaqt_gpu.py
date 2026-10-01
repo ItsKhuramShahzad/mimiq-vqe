@@ -23,7 +23,7 @@ from src.mimiq_hamiltonian import openfermion_to_mimiq_hamiltonian
 from src.run_single import pack_ccsd_singlet
 
 MOLECULE, BASIS = "Ethylene", "cc-pVDZ"
-NCORE, NELE, NORB = 5, 6, 14  # 14 qubits
+NCORE, NELE, NORB = 5, 6, 7  # 14 qubits
 
 REPEATS = 5
 

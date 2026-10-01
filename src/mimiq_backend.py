@@ -1,7 +1,7 @@
 """
 Energy evaluation on MIMIQ via the Exaqt local statevector simulator.
 
-This is the single seed b/w build a circuit at theta and get a number. 
+This is the single step  b/w building a circuit at theta and get a number. 
 
 The driver call make_energy_fn once per active space, then hands the retunred energy_fn to scipy.optimize.minimize() to do the optimization."""
 
@@ -12,7 +12,7 @@ from mimiqcircuits import Add
 from exaqt import ExaqtQCS
 from src.mimiq_ansatz import build_uccsd
 
-def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None):
+def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None, ansatz= build_uccsd):
     """ Build the vqe cost funtion for one molecue and active space.
      Args: 
         H: mimiqcircuits. Hamiotonian for the active space, identity term removed.
@@ -20,7 +20,10 @@ def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None):
         n_electrons: number of electrons in the active space, sets HF reference state.
         constant: identity coefficient split out by Hamiltionan bridge.
             Folded back in so return energy is the total energy of the molecule, sireclty comparable to CASCI and FCI
-    
+        ansatz: function taht build the circuit, called as
+               ansatz(nqubits, nleectron, parrams=...)
+        build_uccsd(singlet, default) or build_uccsd_spin (spin-orbitals
+        same parametes as cuda-q.theta must haev ansatz length.)   
     Returns:
         energy_fn: function that takes a vector of parameters and returns the energy expectation value.
         quanutm_times: list of times for each quantum circuit evaluation, useful for profiling. 
@@ -37,7 +40,7 @@ def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None):
      
     quantum_times=[]
     def energy_fn(theta):
-         circ = build_uccsd(
+         circ = ansatz(
               n_qubits=n_qubits, 
               n_electrons= n_electrons,
               params=list(theta))
