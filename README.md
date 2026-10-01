@@ -318,6 +318,7 @@ GPU against CPU, energies and time per energy:
     scripts/test_exaqt_gpu.py          Exaqt GPU against CPU: energies and timing
     integrals/                   saved integral files (see integrals/README.md)
     images/molecules/           molecule pictures used above
+    results/                    VQE results of the sweep, one pkl per molecule (see results/README.md)
     tests/                       tests
     env/                         conda environment files
 
