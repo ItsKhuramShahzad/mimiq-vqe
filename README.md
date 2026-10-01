@@ -17,6 +17,7 @@ Exaqt state vector simulator.
 - Two UCCSD ansatze: singlet (the default) and spin-orbital, which has the same
   excitations and the same number of parameters as CUDA-Q's UCCSD.
 - Closed shell molecules only.
+- The results of the sweep are in [`results/`](results/README.md).
 
 ## Molecules
 
