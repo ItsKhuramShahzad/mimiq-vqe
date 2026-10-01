@@ -64,7 +64,7 @@ PubChem, as recorded in `config/molecules_data.py`.
 | Tetracene | C<sub>18</sub>H<sub>12</sub> | 120 | 312 | NIST CCCBDB |
 | Pentacene | C<sub>22</sub>H<sub>14</sub> | 146 | 378 | PubChem |
 | Amide anion (NH2-) | NH<sub>2</sub><sup>&minus;</sup> | 10 | 24 | NIST CCCBDB |
-| Methanamide | CHONH<sub>2</sub> | 24 | 57 | |
+| Methanamide | CHONH<sub>2</sub> | 24 | 57 | NIST CCCBDB |
 | Guanine | C<sub>5</sub>H<sub>5</sub>N<sub>5</sub>O | 78 | 179 | PubChem |
 | Cytosine | C<sub>4</sub>H<sub>5</sub>N<sub>3</sub>O | 58 | 137 | PubChem |
 | Adenine | C<sub>5</sub>H<sub>5</sub>N<sub>5</sub> | 70 | 165 | PubChem |
