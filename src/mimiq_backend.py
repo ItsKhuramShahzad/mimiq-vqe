@@ -39,6 +39,7 @@ def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None, ansatz= bui
     sim =ExaqtQCS() 
      
     quantum_times=[]
+    exaqt_timings=[]
     def energy_fn(theta):
          circ = ansatz(
               n_qubits=n_qubits, 
@@ -47,15 +48,16 @@ def make_energy_fn(H, constant=0.0, n_qubits=None, n_electrons=None, ansatz= bui
          circ = circ.decompose()  # Decompose the circuit into basic gates for simulation     
          circ.push_expval(H, *range(H.num_qubits()))  # Add the expectation value measurement for the Hamiltonian
          if abs(constant)>0.0:
-              circ.push(Add(2, c=constant), 0, 0)
-              
-         t0= time.perf_counter()
+              circ.push(Add(2, c=constant), 0, 0)              
          result= sim.execute(circ, nsamples=1)
-         
-         quantum_times.append(time.perf_counter() - t0)
+         timings = {k: float(v) for k, v in result.timings.items()}
+     
+         quantum_times.append(timings['total'])
+         exaqt_timings.append(timings)
          
          return float(np.real(result.zstates[0][0]))         
-    
+    energy_fn.quantum_times= quantum_times
+    energy_fn.exaqt_timings= exaqt_timings
     return energy_fn, quantum_times
                                
                                

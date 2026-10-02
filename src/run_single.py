@@ -524,7 +524,11 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
                 "cycles": int(vqe_out["cycles"]),
                 "runtime": float(vqe_out["runtime_total"]),
                 "simulated_quantum_runtime": float(vqe_out["runtime_quantum_sum"]),
-                "simulated_quantum_runtime": float(vqe_out["runtime_quantum_sum"]),
+                "circuit_build_runtime": float(vqe_out["runtime_circuit_build"]),     # Python, per-theta rebuild
+                "quantum_time_source": "exaqt result.timings['total']",
+                "exaqt_timings": list(vqe_out["exaqt_timings"]),
+                "exaqt_timings_sum": {k: float(sum(t[k] for t in vqe_out["exaqt_timings"]))
+                                      for k in ("compile", "apply", "sample", "total")},
                 "exaqt_execute_seconds": float(sum(execute_times[n_exec_before_vqe:])),
                 "exaqt_execute_calls": int(len(execute_times) - n_exec_before_vqe),
 
