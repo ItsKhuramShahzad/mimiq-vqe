@@ -63,6 +63,7 @@ def optimize_vqe_one_chunk(energy_fn, x0, method="COBYLA", tol=1e-10,
         "runtime_circuit_build": runtime_circuit_build,
         "runtime_optimizer": runtime_optimizer,
         "quantum_times": quantum_times,
+        "evaluation_times": evaluation_times,      # ← add: whole energy_fn call, per evaluatio
         "exaqt_timings": exaqt_timings,
         "energy_convergence": energy_convergence,
     }
@@ -84,7 +85,7 @@ def vqe_until_converged(
 
     all_quantum_times = []
     all_exaqt_timings = []                 # ← new
-
+    all_evaluation_times = []               # ← new
     all_energy_convergence = []
     best_energy_per_cycle = []
     cycle_summaries = []
@@ -92,6 +93,7 @@ def vqe_until_converged(
     total_quantum = 0.0
     total_circuit_build = 0.0
     total_time = 0.0
+    total_evaluation = 0.0
     total_optimizer = 0.0
     total_nit = 0
     total_nfev = 0
@@ -114,7 +116,8 @@ def vqe_until_converged(
         all_quantum_times.extend(out["quantum_times"])
         all_exaqt_timings.extend(out["exaqt_timings"])  # ← new
         all_energy_convergence.extend(out["energy_convergence"])
-
+        all_evaluation_times.extend(out["evaluation_times"])  # ← new
+        
         total_quantum += out["runtime_quantum_sum"]
         total_circuit_build += out["runtime_circuit_build"]
         total_time += out["runtime_total"]
@@ -172,6 +175,8 @@ def vqe_until_converged(
         "runtime_optimizer": float(total_optimizer),
         "cycles": int(cyc),
         "converged": bool(converged),
+        "evaluation_times": all_evaluation_times,      # ← add: whole energy_fn call, per evaluation
+
         "quantum_times": all_quantum_times,
         "exaqt_timings": all_exaqt_timings,                      #
         "energy_convergence": all_energy_convergence,

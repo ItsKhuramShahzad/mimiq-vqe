@@ -534,6 +534,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 
                 "optimizer_runtime": float(vqe_out["runtime_optimizer"]),
                 "quantum_times": list(vqe_out["quantum_times"]),
+                "evaluation_times": list(vqe_out["evaluation_times"]),
                 "energy_convergence": list(vqe_out["energy_convergence"]),
                 "best_energy_per_cycle": list(vqe_out["best_energy_per_cycle"]),
                 "cycle_summaries": list(vqe_out["cycle_summaries"]),
