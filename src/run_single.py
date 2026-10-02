@@ -40,6 +40,8 @@ from src.utils import _stable_hash, sanitize_name, save_pkl
 
 from src.mimiq_ansatz import  build_uccsd, build_uccsd_spin, singlet_to_spin_params, spin_excitations
 
+from src.utils import _stable_hash, run_metadata, sanitize_name, save_pkl
+
 # same constants as the cuda-q script
 
 BASIS= "cc-pVDZ"
@@ -373,6 +375,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         "ccsd": ccsd_block,
         "system_sizes": {"nmo": int(nmo), "nocc": int(nocc), "nvir": int(nvir)},
         "backend_versions": backend_versions(),
+        "run_metadata": run_metadata(),
         "active_space_runs": [],
     }
 
@@ -465,6 +468,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         local_restarts = HEAVY_RESTARTS if is_heavy else N_JITTER_RESTARTS
         local_rhobeg = HEAVY_RHOBEG if is_heavy else COBYLA_RHOBEG
 
+        t_seed0 = time.perf_counter()        # seed search timed on its own (all candidates), as in CUDA-Q
         if local_restarts > 0:
             seed_out = best_of_jitters_one_chunk(
                 energy_fn, theta0, local_rng,
@@ -477,6 +481,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
             seed_out = None
             theta_seed = theta0.copy()
             best_init_index = -1
+        seed_search_runtime = time.perf_counter() - t_seed0     # 0 when the seed search is skipped
         n_exec_before_vqe = len(execute_times)
         vqe_out = vqe_until_converged(
             energy_fn, theta_seed, local_rng,
@@ -522,19 +527,22 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
                 "theta_opt": np.array(vqe_out["theta_opt"], dtype=float),
                 "converged": bool(vqe_out["converged"]),
                 "cycles": int(vqe_out["cycles"]),
+                # runtime = simulated_quantum_runtime + circuit_build_runtime + optimizer_runtime
                 "runtime": float(vqe_out["runtime_total"]),
-                "simulated_quantum_runtime": float(vqe_out["runtime_quantum_sum"]),
+                "simulated_quantum_runtime": float(vqe_out["runtime_quantum_sum"]),   # Exaqt timings['total']
                 "circuit_build_runtime": float(vqe_out["runtime_circuit_build"]),     # Python, per-theta rebuild
+                "optimizer_runtime": float(vqe_out["runtime_optimizer"]),             # COBYLA only
+                "seed_search_runtime": float(seed_search_runtime),                    # before the VQE, not in runtime
                 "quantum_time_source": "exaqt result.timings['total']",
                 "exaqt_timings": list(vqe_out["exaqt_timings"]),
                 "exaqt_timings_sum": {k: float(sum(t[k] for t in vqe_out["exaqt_timings"]))
                                       for k in ("compile", "apply", "sample", "total")},
+                # kept for older PKLs: Exaqt time of every call from the VQE start
+                # (includes the one evaluation vqe_until_converged makes before the optimiser)
                 "exaqt_execute_seconds": float(sum(execute_times[n_exec_before_vqe:])),
                 "exaqt_execute_calls": int(len(execute_times) - n_exec_before_vqe),
-
-                "optimizer_runtime": float(vqe_out["runtime_optimizer"]),
-                "quantum_times": list(vqe_out["quantum_times"]),
-                "evaluation_times": list(vqe_out["evaluation_times"]),
+                "quantum_times": list(vqe_out["quantum_times"]),          # Exaqt timings['total'] per evaluation
+                "evaluation_times": list(vqe_out["evaluation_times"]),    # whole energy_fn call per evaluation
                 "energy_convergence": list(vqe_out["energy_convergence"]),
                 "best_energy_per_cycle": list(vqe_out["best_energy_per_cycle"]),
                 "cycle_summaries": list(vqe_out["cycle_summaries"]),
