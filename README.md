@@ -14,8 +14,10 @@ Exaqt state vector simulator.
   the CASCI energy within chemical accuracy (1.6 mHa); the largest gap is
   0.375 mHa.
 - The energies agree with the CUDA-Q runs of the same active spaces.
-- Two UCCSD ansatze: singlet (the default) and spin-orbital, which has the same
-  excitations and the same number of parameters as CUDA-Q's UCCSD.
+- Two UCCSD ansatze: spin-orbital (the default), which has the same excitations
+  and the same number of parameters as CUDA-Q's UCCSD, and singlet. By default
+  exp(T - T^dagger) is applied as one first-order Trotter step, as in CUDA-Q.
+  (The sweep in `results/` used the singlet ansatz with one second-order step.)
 - Closed shell molecules only.
 - The results of the sweep are in [`results/`](results/README.md).
 
@@ -154,7 +156,8 @@ From the saved integral files (recommended; no SCF or CCSD inside the job):
 | `--molecule` | (required) | molecule name from `config/molecules_data.py` |
 | `--space_idx` | all spaces | run only this active space |
 | `--integrals` | none | read the Hamiltonian, CASCI energy and CCSD amplitudes from this folder |
-| `--ansatz` | `singlet` | `singlet` UCCSD, or `spin`: spin-orbital UCCSD with CUDA-Q's parameter count |
+| `--ansatz` | `spin` | `spin`: spin-orbital UCCSD with CUDA-Q's parameter count, or `singlet` UCCSD |
+| `--trotter_order` | `1` | `1`: one first-order Trotter step, as in CUDA-Q; `2`: second-order Suzuki |
 | `--basis` | `cc-pVDZ` | basis set |
 | `--optimizer` | `COBYLA` | SciPy optimizer |
 | `--out_dir` | `pkl_results/mimiq_exaqt_uccsd_<ansatz>` | where the result pkl is written |
@@ -176,6 +179,17 @@ From the saved integral files (recommended; no SCF or CCSD inside the job):
 Both start from the CCSD amplitudes and give the same starting energy. The
 spin-orbital ansatz lists its excitations in the same order as CUDA-Q, so
 parameter k means the same excitation on both.
+
+### Trotter order
+
+    python -m src.run_single --molecule Ethylene --integrals integrals --trotter_order 1
+    python -m src.run_single --molecule Ethylene --integrals integrals --trotter_order 2
+
+exp(T - T^dagger) is applied as Pauli rotations. First order (`push_lietrotter`)
+applies each rotation once, like the CUDA-Q kernel; second order
+(`push_suzukitrotter`) goes forward with half angles and back, so the circuit is
+twice as long. On small spaces both reach the CASCI energy with about the same
+number of evaluations, and first order is about twice as fast per evaluation.
 
 ### Output
 
@@ -212,8 +226,8 @@ Every VQE starts from the CCSD amplitudes. If CCSD does not converge, the run st
 
 ### On an HPC cluster
 
-The 14 qubit spaces take hours, so the sweep was run with SLURM, one job per
-molecule and its 9 active spaces side by side, 2 threads each:
+The 14 qubit spaces take hours, so the sweep in `results/` was run with SLURM,
+one job per molecule and its 9 active spaces side by side:
 
     #SBATCH --array=0-11
     #SBATCH --cpus-per-task=18
@@ -229,8 +243,9 @@ molecule and its 9 active spaces side by side, 2 threads each:
     done
     wait
 
-Add your own account, partition and time limit. Then put the 9 spaces of each
-molecule back into one pkl:
+Add your own account, partition and time limit. Exaqt takes its threads from
+`RAYON_NUM_THREADS`, not `OMP_NUM_THREADS`; set `RAYON_NUM_THREADS=1` for one core
+per space. Then put the 9 spaces of each molecule back into one pkl:
 
     python scripts/merge_space_pkls.py --in pkl_results/mimiq_exaqt_uccsd_singlet/spaces \
                                        --out pkl_results/mimiq_exaqt_uccsd_singlet
@@ -260,7 +275,8 @@ are the ones stored for that active space.
    For the spin-orbital ansatz they are then mapped onto its excitations, giving
    the same operator (`singlet_to_spin_params` in `src/mimiq_ansatz.py`).
 6. Energy function: build the UCCSD circuit for the parameters, Hartree-Fock
-   state followed by exp(T - T^dagger) as one second order Trotter step, add
+   state followed by exp(T - T^dagger) as one Trotter step (first order by
+   default, `push_trotter` in `src/mimiq_ansatz.py`), add
    `push_expval` for the Hamiltonian, run on Exaqt, read `zstates[0][0]`.
    (`src/mimiq_backend.py`, `src/mimiq_ansatz.py`)
 7. Optimisation with COBYLA: a seed search from the CCSD point and a few
