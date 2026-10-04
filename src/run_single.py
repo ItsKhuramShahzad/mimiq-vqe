@@ -101,6 +101,8 @@ def cudaq_uccsd_num_parameters(n_ele_cas,qubit_count):
     n_params = (2 * n_occ * n_vir
                 + (n_occ * n_vir) ** 2
                 + 2 * (n_occ * (n_occ - 1) // 2) * (n_vir * (n_vir - 1) // 2))
+    saved_argv = sys.argv
+    sys.argv = sys.argv[:1]  # avoid cudaq's cli parsing of the rest of the args
     try: 
         import cudaq
     except ImportError: 
