@@ -13,6 +13,7 @@ python -m src.run_single --molecule Benzene --space_idx 0
 """
 
 import argparse
+from functools import partial
 import os 
 import itertools
 import sys
@@ -47,7 +48,9 @@ from src.utils import _stable_hash, run_metadata, sanitize_name, save_pkl
 BASIS= "cc-pVDZ"
 TARGET= "exaqt-cpu"   # like CUDA-Q's "qpp-cpu": backend and device, used in the PKL name
 OPTIMIZER= "COBYLA"
-ANSATZ = "singlet" # 'singlet': 90 parameters at 14q; 'spin': 204 parameters at 14q; same is cuda-q
+ANSATZ = "spin"     # 'spin': spin-orbital UCCSD, 204 parameters at 14q, same as CUDA-Q (default)
+                    # 'singlet': singlet UCCSD, 90 parameters at 14q
+TROTTER_ORDER = 1   # 1: first order, like the cudaq.kernels.uccsd kernel (default); 2: Suzuki
 SEED =12345
 TOL = 1e-10
 COBYLA_RHOBEG = 0.2
@@ -367,6 +370,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         "cudaq_precision": None,
         "optimizer": OPTIMIZER,
         "ansatz": ANSATZ,
+        "trotter": {"order": TROTTER_ORDER, "steps": 1},
         "seed": int(SEED),
         "input_spec": spec,
         "timing": {"pyscf_run_scf_seconds": setup["scf_seconds"]},
@@ -426,7 +430,8 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 
         H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
         # the circuit builder for chosen ansatz 
-        builder = build_uccsd_spin if ANSATZ =="spin" else build_uccsd
+        builder = partial(build_uccsd_spin if ANSATZ == "spin" else build_uccsd,
+                          trotter_order=TROTTER_ORDER)
 
         # constant=0.0: the driver works with E_nc, c0 is added below.
         energy_fn, execute_times  = make_energy_fn(
@@ -572,7 +577,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 # CLI, same arguments as the reference
 # -----------------------------
 def main():
-    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY, ANSATZ
+    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY, ANSATZ, TROTTER_ORDER
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--molecule", required=True)
@@ -595,7 +600,10 @@ def main():
     parser.add_argument("--max-memory", type=int, default=MAX_MEMORY,
                         help="PySCF memory limit in MB when a missing integral file is made")
     parser.add_argument("--ansatz", default=ANSATZ, choices=["singlet", "spin"],
-                        help="mimiq ansatz type: singlet (90 params at 14q) or spin (4 params at 14q); same as CUDA-Q")
+                        help="spin: spin-orbital UCCSD, same excitations and 204 parameters at 14q "
+                             "as CUDA-Q (default); singlet: singlet UCCSD, 90 parameters at 14q")
+    parser.add_argument("--trotter_order", type=int, default=TROTTER_ORDER, choices=[1, 2],
+                        help="1: first order, like CUDA-Q (default); 2: second-order Suzuki")
     args = parser.parse_args()
 
     BASIS = args.basis
@@ -603,6 +611,7 @@ def main():
     OPTIMIZER = args.optimizer
     MAX_MEMORY = args.max_memory
     ANSATZ = args.ansatz
+    TROTTER_ORDER = args.trotter_order
     if args.molecule not in molecules:
         raise ValueError(f"Molecule '{args.molecule}' not found!")
 
@@ -617,7 +626,7 @@ def main():
         args.out_dir = f"pkl_results/mimiq_exaqt_uccsd_{ANSATZ}"
 
     os.makedirs(args.out_dir, exist_ok=True)
-    print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER} | ANSATZ={ANSATZ}", flush=True)
+    print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER} | ANSATZ={ANSATZ} | TROTTER_ORDER={TROTTER_ORDER}", flush=True)
     tag = time.strftime("%d_%b_%Y").upper()
     ansatz_tag = "uccsd_spin" if ANSATZ == "spin" else "uccsd_singlet"
     

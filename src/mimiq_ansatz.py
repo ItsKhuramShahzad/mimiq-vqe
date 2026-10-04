@@ -22,7 +22,27 @@ from openfermion import (FermionOperator,  jordan_wigner, normal_ordered, uccsd_
 from mimiq_openfermion import to_mimiq, hartree_fock_state, hartree_fock_occupation
 
 
-def build_uccsd(n_qubits, n_electrons, params, trotter_steps=1, trotter_order=2):
+def push_trotter(circuit, ham, trotter_steps=1, trotter_order=1):
+    """Apply exp(-i * ham) = exp(T - T^dagger) to the circuit as Pauli rotations.
+
+    trotter_order 1: Lie-Trotter (push_lietrotter), each Pauli rotation once: one
+    first-order step, like the cudaq.kernels.uccsd kernel. The rotations follow the order
+    of the generator's Pauli terms, not CUDA-Q's excitation-by-excitation order.
+    trotter_order 2, 4, ...: symmetric Suzuki (push_suzukitrotter), each rotation applied
+    more than once.
+    The target range is sized by the generator, not by n_qubits (the ISSUE-07 fix).
+    """
+    qubits = tuple(range(ham.num_qubits()))
+    if trotter_order == 1:
+        circuit.push_lietrotter(ham, qubits, t=1.0, steps=trotter_steps)
+    elif trotter_order >= 2 and trotter_order % 2 == 0:
+        circuit.push_suzukitrotter(ham, qubits, t=1.0, steps=trotter_steps, order=trotter_order)
+    else:
+        raise ValueError(f"trotter_order must be 1 or an even number >= 2, got {trotter_order}")
+    return circuit
+
+
+def build_uccsd(n_qubits, n_electrons, params, trotter_steps=1, trotter_order=1):
     """Build a UCCSD singlet ansatz circuit on mimiq.
 
     Args:
@@ -30,7 +50,7 @@ def build_uccsd(n_qubits, n_electrons, params, trotter_steps=1, trotter_order=2)
         n_electrons (int): number of electrons
         params (array-like): parameters for the ansatz
         trotter_steps (int): number of Trotter steps
-        trotter_order (int): order of the Trotter expansion
+        trotter_order (int): 1 = first order, like CUDA-Q (default); 2, 4, ... = Suzuki
 
     Returns:
         mc.Circuit: the constructed UCCSD singlet ansatz circuit
@@ -56,7 +76,7 @@ def build_uccsd(n_qubits, n_electrons, params, trotter_steps=1, trotter_order=2)
         
     if ham.num_terms()>0:
         # the fix, size the target range by generator . not by n_qubits
-        circuit.push_suzukitrotter(ham, tuple(range(ham.num_qubits())), t=1.0, steps= trotter_steps, order=trotter_order)
+        push_trotter(circuit, ham, trotter_steps, trotter_order)
 
     return circuit
 
@@ -113,7 +133,7 @@ def spin_excitations(n_qubits, n_electrons):
     return singles+doubles
 
     
-def build_uccsd_spin(n_qubits, n_electrons, params, trotter_steps=1, trotter_order=2):
+def build_uccsd_spin(n_qubits, n_electrons, params, trotter_steps=1, trotter_order=1):
     """ Spin-orbital uccsd circuit |psi> = exp(T-T^dagger) |HF> with T the spin conserving singles and doubles generator.
     params[k] is the amplitudes of excitation from spin_excitations(n_qubits, n_electrons)[k]
     
@@ -144,12 +164,12 @@ def build_uccsd_spin(n_qubits, n_electrons, params, trotter_steps=1, trotter_ord
     circuit = mc.Circuit()
     hartree_fock_state(n_qubits, hartree_fock_occupation(n_qubits, n_electrons), circuit= circuit)
     
-    # apply exp(T-T^dagger) as Pauli rotations (one 2nd order trotter step)
+    # apply exp(T-T^dagger) as Pauli rotations (one Trotter step, first order by default)
     # all zero amplitudes give an empty generator: then the circuit stay HF.
     
     if ham.num_terms()>0:
         # same fix as build_uccsd: size the target range by generator . not by n_qubits
-        circuit.push_suzukitrotter(ham, tuple(range(ham.num_qubits())), t=1.0, steps = trotter_steps,order = trotter_order)
+        push_trotter(circuit, ham, trotter_steps, trotter_order)
         
     return circuit
 
