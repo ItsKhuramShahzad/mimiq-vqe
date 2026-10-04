@@ -158,6 +158,7 @@ From the saved integral files (recommended; no SCF or CCSD inside the job):
 | `--integrals` | none | read the Hamiltonian, CASCI energy and CCSD amplitudes from this folder |
 | `--ansatz` | `spin` | `spin`: spin-orbital UCCSD with CUDA-Q's parameter count, or `singlet` UCCSD |
 | `--trotter_order` | `1` | `1`: one first-order Trotter step, as in CUDA-Q; `2`: second-order Suzuki |
+| `--target` | `exaqt-cpu` | `exaqt-cpu`: Exaqt state vector on the CPU; `exaqt-gpu`: on an NVIDIA GPU (cuStateVec) |
 | `--basis` | `cc-pVDZ` | basis set |
 | `--optimizer` | `COBYLA` | SciPy optimizer |
 | `--out_dir` | `pkl_results/mimiq_exaqt_uccsd_<ansatz>` | where the result pkl is written |
@@ -224,7 +225,25 @@ To make all the files in advance:
 
 Every VQE starts from the CCSD amplitudes. If CCSD does not converge, the run stops.
 
-### On an HPC cluster
+### Final runs (as the CUDA-Q final run)
+
+`scripts/run_cpu_final.sh` and `scripts/run_gpu_final.sh` (with `scripts/final_run_common.sh`)
+run one array task per molecule, its 9 active spaces one after another on one core, with the
+spin ansatz and one first-order Trotter step, from `integrals/`. They stop if the software
+versions differ from the shared environment or if `src/` has uncommitted changes. Give the
+account and partition on the command line:
+
+    mkdir -p logs
+    sbatch -A <account> -p <partition> scripts/run_cpu_final.sh                          # exaqt-cpu
+    sbatch -A <account> --qos=<qos> -p <gpu partition> scripts/run_gpu_final.sh          # exaqt-gpu
+    SPACE_IDX=7 sbatch -A <account> -p <partition> --array=0 scripts/run_cpu_final.sh    # short test
+
+Each PKL records the machine and code in `run_metadata` (hostname, CPU model, GPU, SLURM job,
+thread settings, git commit) and the timing split: `simulated_quantum_runtime` (Exaqt's own
+`timings['total']`), `circuit_build_runtime`, `optimizer_runtime`, `seed_search_runtime`, and
+per evaluation `quantum_times`, `evaluation_times` and `exaqt_timings`.
+
+### On an HPC cluster (the earlier sweep)
 
 The 14 qubit spaces take hours, so the sweep in `results/` was run with SLURM,
 one job per molecule and its 9 active spaces side by side:
@@ -332,6 +351,8 @@ GPU against CPU, energies and time per energy:
     scripts/dump_active_integrals.py   make the integral files for all molecules
     scripts/merge_space_pkls.py        one pkl per molecule from per-space runs
     scripts/test_exaqt_gpu.py          Exaqt GPU against CPU: energies and timing
+    scripts/run_cpu_final.sh           final run, CPU (with final_run_common.sh)
+    scripts/run_gpu_final.sh           final run, GPU (with final_run_common.sh)
     integrals/                   saved integral files (see integrals/README.md)
     images/molecules/           molecule pictures used above
     results/                    VQE results of the sweep, one pkl per molecule (see results/README.md)
