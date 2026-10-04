@@ -435,7 +435,7 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 
         # constant=0.0: the driver works with E_nc, c0 is added below.
         energy_fn, execute_times  = make_energy_fn(
-            H, constant=0.0, n_qubits=qubit_count, n_electrons=nele_cas, ansatz=builder)
+            H, constant=0.0, n_qubits=qubit_count, n_electrons=nele_cas, ansatz=builder, target=TARGET)
         if ANSATZ == "spin":
             expected = len(spin_excitations(qubit_count, nele_cas))
         else :
@@ -583,8 +583,10 @@ def main():
     parser.add_argument("--molecule", required=True)
     parser.add_argument("--basis", default=BASIS)
     # The target goes into the PKL name, so it must say where the run really happened.
-    # ExaqtQCS() in src/mimiq_backend.py runs on the CPU; add a choice only with a real backend.
-    parser.add_argument("--target", default=TARGET, choices=["exaqt-cpu"])
+   
+    parser.add_argument("--target", default=TARGET, choices=["exaqt-cpu", "exaqt-gpu"],
+                        help="exaqt-cpu: Exaqt state vector on the CPU; exaqt-gpu: on an NVIDIA GPU (cuStateVec)")
+
     parser.add_argument("--precision", default="default",
                         choices=["default", "fp32", "fp64"],
                         help="accepted for CLI parity with CUDA-Q; ignored on MIMIQ")
