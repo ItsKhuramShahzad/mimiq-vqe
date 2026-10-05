@@ -10,3 +10,7 @@ figures/
 tex_out/
 *.bak-*
 integrals_test/
+
+# QPerfect wheels (proprietary): kept locally in env/wheels/, never committed
+*.whl
+env/wheels/
