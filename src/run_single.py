@@ -51,6 +51,11 @@ OPTIMIZER= "COBYLA"
 ANSATZ = "spin"     # 'spin': spin-orbital UCCSD, 204 parameters at 14q, same as CUDA-Q (default)
                     # 'singlet': singlet UCCSD, 90 parameters at 14q
 TROTTER_ORDER = 1   # 1: first order, like the cudaq.kernels.uccsd kernel (default); 2: Suzuki
+
+LUCJ_REPS = 2         # --ansatz lucj: number of LUCJ layers
+LUCJ_PAIRS = "local"  # --ansatz lucj: 'local' (aa p,p+1; ab p,p, as in SQD) or 'full' (UCJ)
+lucj = None           # src.mimiq_lucj, imported only for --ansatz lucj (it needs ffsim)
+
 SEED =12345
 TOL = 1e-10
 COBYLA_RHOBEG = 0.2
@@ -107,6 +112,8 @@ def cudaq_uccsd_num_parameters(n_ele_cas,qubit_count):
         import cudaq
     except ImportError: 
         return n_params
+    finally:
+        sys.argv = saved_argv
     n_cudaq = int(cudaq.kernels.uccsd_num_parameters(n_ele_cas, qubit_count)
                          )    
     if n_cudaq != n_params:
@@ -339,6 +346,11 @@ def setup_from_integrals(files, spec):
 
 
 def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
+    global lucj
+    if ANSATZ == "lucj" and lucj is None:
+        from src import mimiq_lucj as lucj # needs ffsim, only omported for lucj
+        
+        
     mol_name_clean = sanitize_name(mol_name)
 
     if int(spec["multiplicity"]) != 1 or int(spec["Total Electrons"]) % 2 != 0:
@@ -372,7 +384,11 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         "cudaq_precision": None,
         "optimizer": OPTIMIZER,
         "ansatz": ANSATZ,
-        "trotter": {"order": TROTTER_ORDER, "steps": 1},
+                "trotter": None if ANSATZ == "lucj" else {"order": TROTTER_ORDER, "steps": 1},
+        "lucj": ({"n_reps": LUCJ_REPS, "pairs": LUCJ_PAIRS, "final_orbital_rotation": True,
+                  "start": "ffsim.UCJOpSpinBalanced.from_t_amplitudes(t2, t1=t1)"}
+                 if ANSATZ == "lucj" else None),
+
         "seed": int(SEED),
         "input_spec": spec,
         "timing": {"pyscf_run_scf_seconds": setup["scf_seconds"]},
@@ -419,7 +435,10 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         if files is not None:
             data = files.get(ncore, nele_cas, norb_cas)
             E_CASCI = data["e_casci"]
-            qop = qubit_hamiltonian(data)
+            if ANSATZ == "lucj":
+                qop = lucj.qubit_hamiltonian_alpha_then_beta(data) # ffsim's qubit order
+            else:
+                qop = qubit_hamiltonian(data)
             molecule_results["timing"]["pyscf_run_scf_seconds"] = files.seconds
             molecule_results["integral_files_made"] = list(files.made)
         else:
@@ -428,21 +447,31 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
             E_CASCI = float(casci.kernel()[0])
             molecular_ham = molecule.get_molecular_hamiltonian(
                 occupied_indices=occ, active_indices=act)
-            qop = jordan_wigner(get_fermion_operator(molecular_ham))
+            fop = get_fermion_operator(molecular_ham)
+            if ANSATZ == "lucj":
+                fop = lucj.alpha_then_beta(fop, norb_cas)  # ffsim's qubit order
+            
+            qop = jordan_wigner(fop)
+            
 
         H, c0, _ = openfermion_to_mimiq_hamiltonian(qop)
         # the circuit builder for chosen ansatz 
-        builder = partial(build_uccsd_spin if ANSATZ == "spin" else build_uccsd,
+        if ANSATZ == "lucj":
+            builder = partial(lucj.build_lucj, n_reps=LUCJ_REPS, pairs_kind=LUCJ_PAIRS)
+        else:
+            builder = partial(build_uccsd_spin if ANSATZ == "spin" else build_uccsd,
                           trotter_order=TROTTER_ORDER)
 
         # constant=0.0: the driver works with E_nc, c0 is added below.
         energy_fn, execute_times  = make_energy_fn(
             H, constant=0.0, n_qubits=qubit_count, n_electrons=nele_cas, ansatz=builder, target=TARGET)
-        if ANSATZ == "spin":
+        if ANSATZ == "lucj":
+            expected = int(lucj.lucj_num_parameters(norb_cas, LUCJ_REPS, LUCJ_PAIRS))
+        elif ANSATZ == "spin":
             expected = len(spin_excitations(qubit_count, nele_cas))
         else :
             expected = int(uccsd_singlet_paramsize(qubit_count, nele_cas))
-        
+
 
         # theta0 always comes from the CCSD amplitudes, never from zeros
         if data is not None:
@@ -458,6 +487,13 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
         if ANSATZ == "spin":
             theta0 = singlet_to_spin_params(theta0, qubit_count, nele_cas)
             theta0_source+= ", mapped to spin orbital excitations"
+        # LUCJ: from the same CCSD amplitudes, t2 factorised into the layers, t1 a final rotation
+        if ANSATZ == "lucj":
+            t1_act, t2_act = ((data["t1_active"], data["t2_active"]) if data is not None
+                              else slice_ccsd_to_active(t1amp, t2amp, nocc, act))
+            theta0 = lucj.lucj_start(np.asarray(t1_act), np.asarray(t2_act), LUCJ_REPS, LUCJ_PAIRS)
+            theta0_source = (f"CCSD (ffsim from_t_amplitudes, n_reps={LUCJ_REPS}, pairs={LUCJ_PAIRS})"
+                             + (", from integral file" if data is not None else ""))
             
         if len(theta0) != expected:
             raise RuntimeError(f"CCSD seed has {len(theta0)} parameters, the ansatz needs "
@@ -579,7 +615,8 @@ def run_one_molecule(mol_name, spec, checkpoint_path=None, integrals_dir=None):
 # CLI, same arguments as the reference
 # -----------------------------
 def main():
-    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY, ANSATZ, TROTTER_ORDER
+    global BASIS, TARGET, OPTIMIZER, MAX_MEMORY, ANSATZ, TROTTER_ORDER, LUCJ_REPS, LUCJ_PAIRS
+
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--molecule", required=True)
@@ -603,7 +640,11 @@ def main():
                              "missing files are made and saved there")
     parser.add_argument("--max-memory", type=int, default=MAX_MEMORY,
                         help="PySCF memory limit in MB when a missing integral file is made")
-    parser.add_argument("--ansatz", default=ANSATZ, choices=["singlet", "spin"],
+    parser.add_argument("--lucj-reps", type=int, default=LUCJ_REPS,
+                        help="--ansatz lucj: number of LUCJ layers (default 2)")
+    parser.add_argument("--lucj-pairs", default=LUCJ_PAIRS, choices=["local", "full"],
+                        help="--ansatz lucj: local (aa p,p+1; ab p,p) or full (UCJ)")
+    parser.add_argument("--ansatz", default=ANSATZ, choices=["singlet", "spin", "lucj"],
                         help="spin: spin-orbital UCCSD, same excitations and 204 parameters at 14q "
                              "as CUDA-Q (default); singlet: singlet UCCSD, 90 parameters at 14q")
     parser.add_argument("--trotter_order", type=int, default=TROTTER_ORDER, choices=[1, 2],
@@ -616,6 +657,9 @@ def main():
     MAX_MEMORY = args.max_memory
     ANSATZ = args.ansatz
     TROTTER_ORDER = args.trotter_order
+    LUCJ_REPS = args.lucj_reps
+    LUCJ_PAIRS = args.lucj_pairs
+
     if args.molecule not in molecules:
         raise ValueError(f"Molecule '{args.molecule}' not found!")
 
@@ -625,14 +669,17 @@ def main():
         if not 0 <= args.space_idx < len(spaces):
             raise ValueError(f"--space_idx {args.space_idx} out of range (0-{len(spaces) - 1})")
         spec["valid_active_spaces"] = [spaces[args.space_idx]]
-
+    ansatz_tag = "lucj" if ANSATZ == "lucj" else f"uccsd_{ANSATZ}"   # used in the folder and file name
     if args.out_dir is None:
-        args.out_dir = f"pkl_results/mimiq_exaqt_uccsd_{ANSATZ}"
+        args.out_dir = f"pkl_results/mimiq_exaqt_{ansatz_tag}"
+
 
     os.makedirs(args.out_dir, exist_ok=True)
-    print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER} | ANSATZ={ANSATZ} | TROTTER_ORDER={TROTTER_ORDER}", flush=True)
+    print(f"[RUN] {args.molecule} | BASIS={BASIS} | TARGET={TARGET} | OPT={OPTIMIZER} | ANSATZ={ANSATZ} | "
+          + (f"LUCJ n_reps={LUCJ_REPS} pairs={LUCJ_PAIRS}" if ANSATZ == "lucj" else f"TROTTER_ORDER={TROTTER_ORDER}"),
+          flush=True)
+
     tag = time.strftime("%d_%b_%Y").upper()
-    ansatz_tag = "uccsd_spin" if ANSATZ == "spin" else "uccsd_singlet"
     
     file_name = (f"{tag}_{sanitize_name(args.molecule)}_{sanitize_name(BASIS)}_"
                  f"{sanitize_name(TARGET)}_{sanitize_name(OPTIMIZER)}_{ansatz_tag}_VQE_results.pkl")
